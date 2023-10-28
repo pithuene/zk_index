@@ -41,10 +41,24 @@ class FileChangeWatcher(FileSystemEventHandler):
         self.observer.stop()
         print("Stopped file change watcher")
         
+        
+    def should_be_indexed(self, file_path) -> bool:
+        # File is hidden or in a hidden directory
+        if "/." in file_path:
+            return False
+
+        # Ignore non .md files
+        if not file_path.endswith(".md"):
+            return False
+            
+        return True
 
     last_index_call_time = {}
 
     def index(self, file_path):
+        if not self.should_be_indexed(file_path):
+            return
+
         call_time = time.time()
         self.last_index_call_time[file_path] = call_time
 
@@ -60,6 +74,9 @@ class FileChangeWatcher(FileSystemEventHandler):
     last_remove_call_time = {}
 
     def remove(self, file_path):
+        if not self.should_be_indexed(file_path):
+            return
+
         call_time = time.time()
         self.last_remove_call_time[file_path] = call_time
 
@@ -99,12 +116,10 @@ class FileChangeWatcher(FileSystemEventHandler):
         for root,dirs, files in os.walk(self.directory_path):
             for file in files:
                 file_path = os.path.join(root, file)
-                if "/." in file_path:
-                    # File is hidden or in a hidden directory
+
+                if not self.should_be_indexed(file_path):
                     continue
-                # Ignore non .md files
-                if not file.endswith(".md"):
-                    continue
+
                 modified_time = os.path.getmtime(file_path)
                 # Compare the last modified time to the last modified time stored in the file
                 if modified_time > self.last_modified_time:
