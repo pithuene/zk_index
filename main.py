@@ -43,7 +43,7 @@ async def main():
         cursor.execute("SELECT value FROM _config WHERE key = 'last_run_time'")
         result = cursor.fetchone()
         cursor.close()
-        return result[0] if result else 0
+        return float(result[0]) if result else 0
 
     def write_last_run(time: float):
         cursor = index_manager.conn.cursor()
@@ -77,4 +77,7 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except:
+        print("Shut down.")
