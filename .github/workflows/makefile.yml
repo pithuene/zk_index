@@ -17,5 +17,8 @@ jobs:
     - name: Install jupyter
       run: sudo apt-get install jupyter-notebook
 
+    - name: Install nbconvert
+      run: pip install nbconvert
+
     - name: Run tests
       run: make test
