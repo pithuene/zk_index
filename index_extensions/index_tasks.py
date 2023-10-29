@@ -10,6 +10,7 @@ from index import IndexExtension
 # Example:
 # "This is a task 📅 2021-10-10 that must be done" => ("This is a task that must be done", "2021-10-10")
 def find_date_with_marker(marker: str, content: str) -> Tuple[str, str]:
+    return (content, None)
     # Find the index of the due date marker
     due_date_marker_index = content.find(marker + " ")
     # If no marker is found, return None
