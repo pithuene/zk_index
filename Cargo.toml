@@ -1,0 +1,18 @@
+[package]
+name = "zk_index"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+async-std = "1.12.0"
+env_logger = "0.10.1"
+log = "0.4.20"
+notify = "6.1.1"
+diesel = { version = "2.1.0", features = ["sqlite"] }
+clap = "4.4.8"
+walkdir = "2.4.0"
+# sqlx = { version = "0.7", features = [ "runtime-async-std", "sqlite" ] }
+

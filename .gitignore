@@ -1,3 +1,5 @@
+/target
+result*
 models
 .vscode
 __pycache__
