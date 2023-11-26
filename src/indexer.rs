@@ -1,14 +1,20 @@
-use std::sync::mpsc::Receiver;
+use std::{
+    path::{Path, PathBuf},
+    sync::mpsc::Receiver,
+};
 
-use crate::watcher::{self, Note};
+use crate::{
+    note::Note,
+    watcher::{self},
+};
 
 pub trait IndexExt {
     // Called to initialize the index if it doesn't exist yet.
     fn init(&mut self);
     // Called to add a note to the index.
-    fn index(&mut self, note: &Note);
+    fn index(&mut self, note: &mut Note);
     // Called to remove a note from the index.
-    fn remove(&mut self, note: &Note);
+    fn remove(&mut self, path: PathBuf);
 }
 
 pub struct Indexer {
@@ -34,19 +40,24 @@ impl Indexer {
         });
         loop {
             match self.index_event_receiver.recv().unwrap() {
-                watcher::IndexEvent::Add(note) => {
-                    log::debug!("Adding note to index: {:?}", note.absolute_path);
+                watcher::IndexEvent::Add(rel_path) => {
+                    log::debug!("Adding note to index: {:?}", rel_path);
+                    let mut note = self.read_note_file(&rel_path);
                     self.index_extensions.iter_mut().for_each(|index| {
-                        index.index(&note);
+                        index.index(&mut note);
                     });
                 }
-                watcher::IndexEvent::Remove(note) => {
-                    log::debug!("Removing note from index: {:?}", note.absolute_path);
+                watcher::IndexEvent::Remove(rel_path) => {
+                    log::debug!("Removing note from index: {:?}", rel_path);
                     self.index_extensions.iter_mut().for_each(|index| {
-                        index.remove(&note);
+                        index.remove(rel_path.clone());
                     });
                 }
             }
         }
+    }
+
+    fn read_note_file(&self, rel_path: &Path) -> Note {
+        Note::new(rel_path)
     }
 }

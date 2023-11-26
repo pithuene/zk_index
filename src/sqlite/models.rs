@@ -1,9 +1,18 @@
-use super::schema::note;
+use super::schema::{file, note};
 use diesel::prelude::*;
 
+#[derive(Queryable, Selectable, Insertable)]
+#[diesel(table_name = file)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct File {
+    pub path: String,
+}
+
+/// A note, has a vault path and a foreign key to a file.
 #[derive(Queryable, Selectable, Insertable)]
 #[diesel(table_name = note)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct Note {
-    pub path: String,
+    pub vault_path: String,
+    pub file: String,
 }

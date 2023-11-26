@@ -11,16 +11,10 @@ use std::{
 };
 
 #[derive(Clone, Debug)]
-pub struct Note {
-    pub content: String,
-    pub absolute_path: Box<Path>,
-    pub vault_path: Box<Path>,
-}
-
-#[derive(Clone, Debug)]
 pub enum IndexEvent {
-    Remove(Note),
-    Add(Note),
+    // Remove must be idempotent, it may be called for non-existing notes.
+    Remove(PathBuf),
+    Add(PathBuf),
 }
 
 pub struct DirWatcher {
@@ -99,14 +93,13 @@ impl DirWatcher {
                     .as_secs();
 
                 if modified > last_run_time {
-                    let note = self.read_note_file(entry.path());
-                    self.emit_index_events(vec![
-                        IndexEvent::Remove(note.clone()),
-                        IndexEvent::Add(note),
-                    ]);
+                    let rel_path = self.relative_path_from_absolute_path(entry.path());
+                    self.emit_index_event(IndexEvent::Remove(rel_path.clone()));
+                    self.emit_index_event(IndexEvent::Add(rel_path));
                 }
             }
         }
+        // TODO: You need to iterate over all files in the index too, and check, if they still exist.
 
         loop {
             match self.file_event_receiver.recv().unwrap() {
@@ -116,62 +109,95 @@ impl DirWatcher {
         }
     }
 
-    fn emit_index_events(&self, events: Vec<IndexEvent>) {
-        events.iter().for_each(|event| {
-            log::debug!("Adding {:?} event to index event channel.", event);
-            self.index_event_sender.send(event.clone()).unwrap();
-        });
+    fn emit_index_event(&self, event: IndexEvent) {
+        log::debug!("Adding {:?} event to index event channel.", event);
+        self.index_event_sender.send(event).unwrap();
     }
 
     fn handle_event(&self, event: notify::event::Event) {
+        use notify::event::EventKind::{Create, Modify, Remove};
+        use notify::event::ModifyKind;
+        use notify::event::RenameMode;
         match event.kind {
-            notify::event::EventKind::Modify(_) => {
+            /* Apparently, the RenameMode::Both event is emitted **in addition** to the
+               RenameMode::From and RenameMode::To events. So we don't need to handle it
+               here.
+
+            Modify(ModifyKind::Name(RenameMode::Both)) => {
+                log::debug!("Handling event: {:?}", event);
+                assert!(event.paths.len() == 2);
+                let from_path = event.paths.first().unwrap();
+                let to_path = event.paths.last().unwrap();
+                if (self.file_filter)(from_path) {
+                    let rel_path = self.relative_path_from_absolute_path(from_path);
+                    self.emit_index_event(IndexEvent::Remove(rel_path));
+                }
+                if (self.file_filter)(to_path) {
+                    let rel_path = self.relative_path_from_absolute_path(to_path);
+                    self.emit_index_event(IndexEvent::Add(rel_path));
+                }
+            }*/
+            Modify(ModifyKind::Name(RenameMode::From)) => {
+                assert!(event.paths.len() == 1);
+                let from_path = event.paths.first().unwrap();
+                if (self.file_filter)(from_path) {
+                    log::debug!("Handling event: {:?}", event);
+                    let rel_path = self.relative_path_from_absolute_path(from_path);
+                    self.emit_index_event(IndexEvent::Remove(rel_path));
+                }
+            }
+            Modify(ModifyKind::Name(RenameMode::To)) => {
+                assert!(event.paths.len() == 1);
+                let to_path = event.paths.first().unwrap();
+                if (self.file_filter)(to_path) {
+                    log::debug!("Handling event: {:?}", event);
+                    let rel_path = self.relative_path_from_absolute_path(to_path);
+                    self.emit_index_event(IndexEvent::Add(rel_path));
+                }
+            }
+            Modify(ModifyKind::Data(_)) => {
+                assert!(event.paths.len() == 1);
                 event.paths.iter().for_each(|path| {
                     if (self.file_filter)(path) {
-                        let note = self.read_note_file(path);
-                        self.emit_index_events(vec![
-                            IndexEvent::Remove(note.clone()),
-                            IndexEvent::Add(note),
-                        ])
+                        log::debug!("Handling event: {:?}", event);
+                        let rel_path = self.relative_path_from_absolute_path(path);
+                        self.emit_index_event(IndexEvent::Remove(rel_path.clone()));
+                        self.emit_index_event(IndexEvent::Add(rel_path));
                     }
                 });
             }
-            notify::event::EventKind::Create(_) => {
+            Create(_) => {
+                assert!(event.paths.len() == 1);
                 event.paths.iter().for_each(|path| {
                     if (self.file_filter)(path) {
-                        let note = self.read_note_file(path);
-                        self.emit_index_events(vec![IndexEvent::Add(note)])
+                        log::debug!("Handling event: {:?}", event);
+                        self.emit_index_event(IndexEvent::Add(
+                            self.relative_path_from_absolute_path(path),
+                        ));
                     }
                 });
             }
-            notify::event::EventKind::Remove(_) => {
+            Remove(_) => {
+                assert!(event.paths.len() == 1);
                 event.paths.iter().for_each(|path| {
                     if (self.file_filter)(path) {
-                        let note = self.read_note_file(path);
-                        self.emit_index_events(vec![IndexEvent::Remove(note)])
+                        log::debug!("Handling event: {:?}", event);
+                        self.emit_index_event(IndexEvent::Remove(
+                            self.relative_path_from_absolute_path(path),
+                        ));
                     }
                 });
             }
-            _ => {}
+            _ => {
+                log::debug!("Unhandled event: {:?}", event);
+            }
         }
     }
 
-    fn vault_path_from_absolute_path(&self, path: &Path) -> PathBuf {
-        let relative_path = path.strip_prefix(&self.vault_root_path).unwrap();
-        let mut vault_path = PathBuf::from("");
-        if relative_path.extension().unwrap() == "md" {
-            vault_path.push(relative_path.file_stem().unwrap());
-        } else {
-            vault_path.push(relative_path);
-        }
-        vault_path
-    }
-
-    fn read_note_file(&self, path: &Path) -> Note {
-        Note {
-            content: String::from(""),
-            absolute_path: Box::from(path),
-            vault_path: Box::from(self.vault_path_from_absolute_path(path)),
-        }
+    fn relative_path_from_absolute_path(&self, absolute_path: &Path) -> PathBuf {
+        absolute_path
+            .strip_prefix(&self.vault_root_path)
+            .unwrap()
+            .to_path_buf()
     }
 }

@@ -3,6 +3,7 @@ use env_logger::Builder;
 use std::{path::Path, sync::mpsc::channel, thread};
 
 mod indexer;
+pub mod note;
 mod sqlite;
 use sqlite::SqliteIndex;
 mod watcher;
@@ -41,7 +42,10 @@ fn main() {
 
     let indexer_task = thread::spawn(|| {
         let mut indexer = indexer::Indexer::new(
-            vec![Box::new(SqliteIndex::new(index_dir))],
+            vec![
+                Box::new(SqliteIndex::new(index_dir)),
+                Box::new(sqlite::note_index::NoteIndex {}),
+            ],
             index_event_receiver,
         );
         log::info!("Indexer starting.");
