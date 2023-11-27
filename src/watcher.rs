@@ -22,9 +22,16 @@ pub struct DirWatcher {
     watcher: RecommendedWatcher,
     file_event_receiver: Receiver<Result<notify::Event, notify::Error>>,
     index_event_sender: Sender<IndexEvent>,
-    last_run_time_file: std::fs::File,
+    last_run_time_file_path: PathBuf,
     /// Function which is passed to the watcher to configure a file filter.
     file_filter: Box<dyn Fn(&Path) -> bool>,
+}
+
+pub fn file_has_hidden_component(path: &Path) -> bool {
+    path.components().any(|c| {
+        c.as_os_str().to_str().unwrap().starts_with('.')
+            && c.as_os_str().to_str().unwrap().len() > 1
+    })
 }
 
 impl DirWatcher {
@@ -43,28 +50,26 @@ impl DirWatcher {
         let mut watcher: RecommendedWatcher = recommended_watcher(tx).unwrap();
         watcher.configure(config).unwrap();
 
-        // Open the last run time file.
-        let last_run_time_file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .read(true)
-            .open(last_run_time_file_path)
-            .unwrap();
-
         Self {
             vault_root_path: Box::from(path),
             watcher,
             file_event_receiver: rx,
             index_event_sender,
-            last_run_time_file,
+            last_run_time_file_path,
             file_filter,
         }
     }
 
     /// Read last run time from file.
     fn read_last_run_time(&mut self) -> u64 {
+        // Open the last run time file.
+        let mut last_run_time_file = std::fs::OpenOptions::new()
+            .read(true)
+            .open(&self.last_run_time_file_path)
+            .unwrap();
+
         let mut last_run_file_content = String::new();
-        self.last_run_time_file
+        last_run_time_file
             .read_to_string(&mut last_run_file_content)
             .ok()
             .map_or(0, |_| last_run_file_content.parse::<u64>().unwrap_or(0))
@@ -199,5 +204,62 @@ impl DirWatcher {
             .strip_prefix(&self.vault_root_path)
             .unwrap()
             .to_path_buf()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::watcher::file_has_hidden_component;
+
+    fn setup_watcher() -> (tempfile::TempDir, super::DirWatcher) {
+        // Create a temporary directory.
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let watcher = super::DirWatcher::new(
+            temp_dir.path().to_str().unwrap(),
+            std::sync::mpsc::channel().0,
+            temp_dir.path().join(".zk_index/last_run_time"),
+            Box::new(file_has_hidden_component),
+        );
+        (temp_dir, watcher)
+    }
+
+    #[test]
+    fn test_relative_path_from_absolute_path() {
+        use std::path::PathBuf;
+        let (dir, watcher) = setup_watcher();
+        assert_eq!(
+            watcher.relative_path_from_absolute_path(&dir.path().join("test.md")),
+            PathBuf::from("test.md")
+        );
+        assert_eq!(
+            watcher.relative_path_from_absolute_path(&dir.path().join("test")),
+            PathBuf::from("test")
+        );
+        assert_eq!(
+            watcher.relative_path_from_absolute_path(&dir.path().join(".zk_index")),
+            PathBuf::from(".zk_index")
+        );
+        assert_eq!(
+            watcher.relative_path_from_absolute_path(&dir.path().join(".zk_index/")),
+            PathBuf::from(".zk_index/")
+        );
+    }
+
+    #[test]
+    fn test_file_has_hidden_component() {
+        use std::path::Path;
+
+        // Hidden files.
+        assert!(file_has_hidden_component(Path::new("./.test")));
+        assert!(file_has_hidden_component(Path::new("/tmp/.test")));
+        assert!(file_has_hidden_component(Path::new("/tmp/.test/test")));
+        assert!(file_has_hidden_component(Path::new("/tmp/test/.test")));
+        assert!(file_has_hidden_component(Path::new("/tmp/test/.test/test")));
+
+        // Non-hidden files.
+        assert!(!file_has_hidden_component(Path::new("./test")));
+        assert!(!file_has_hidden_component(Path::new("/tmp/test")));
+        assert!(!file_has_hidden_component(Path::new("/tmp/test/test")))
     }
 }

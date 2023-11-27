@@ -1,6 +1,7 @@
 use clap::{Arg, Command};
 use env_logger::Builder;
 use std::{path::Path, sync::mpsc::channel, thread};
+use watcher::file_has_hidden_component;
 
 mod indexer;
 pub mod note;
@@ -54,11 +55,7 @@ fn main() {
     });
 
     // Ignore hidden files or files in hidden directories.
-    let file_filter = Box::new(|path: &Path| {
-        !path
-            .components()
-            .any(|c| c.as_os_str().to_str().unwrap().starts_with('.'))
-    });
+    let file_filter = Box::new(file_has_hidden_component);
 
     let watcher_task = thread::spawn(move || {
         let mut watcher = watcher::DirWatcher::new(
