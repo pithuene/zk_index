@@ -210,6 +210,7 @@ impl DirWatcher {
 #[cfg(test)]
 mod tests {
     use crate::watcher::file_has_hidden_component;
+    use proptest::prelude::*;
 
     fn setup_watcher() -> (tempfile::TempDir, super::DirWatcher) {
         // Create a temporary directory.
@@ -224,26 +225,31 @@ mod tests {
         (temp_dir, watcher)
     }
 
+    fn cleanup_watcher(dir: tempfile::TempDir) {
+        tempfile::TempDir::close(dir).unwrap();
+    }
+
     #[test]
     fn test_relative_path_from_absolute_path() {
         use std::path::PathBuf;
         let (dir, watcher) = setup_watcher();
-        assert_eq!(
-            watcher.relative_path_from_absolute_path(&dir.path().join("test.md")),
-            PathBuf::from("test.md")
-        );
-        assert_eq!(
-            watcher.relative_path_from_absolute_path(&dir.path().join("test")),
-            PathBuf::from("test")
-        );
-        assert_eq!(
-            watcher.relative_path_from_absolute_path(&dir.path().join(".zk_index")),
-            PathBuf::from(".zk_index")
-        );
+
         assert_eq!(
             watcher.relative_path_from_absolute_path(&dir.path().join(".zk_index/")),
             PathBuf::from(".zk_index/")
         );
+
+        proptest!(|(name in "[^/\0]+")| {
+            if name != "." && name != ".." {
+                let path = dir.path().join(&name);
+                assert_eq!(
+                    watcher.relative_path_from_absolute_path(&path),
+                    PathBuf::from(name)
+                );
+            }
+        });
+
+        cleanup_watcher(dir);
     }
 
     #[test]
