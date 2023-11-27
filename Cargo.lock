@@ -847,6 +847,7 @@ dependencies = [
  "notify",
  "once_cell",
  "proptest",
+ "rand",
  "tempfile",
  "walkdir",
 ]

@@ -209,16 +209,22 @@ impl DirWatcher {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc::Sender;
+
     use crate::watcher::file_has_hidden_component;
     use proptest::prelude::*;
 
-    fn setup_watcher() -> (tempfile::TempDir, super::DirWatcher) {
+    use super::IndexEvent;
+
+    fn setup_watcher(
+        index_event_sender: Sender<IndexEvent>,
+    ) -> (tempfile::TempDir, super::DirWatcher) {
         // Create a temporary directory.
         let temp_dir = tempfile::tempdir().unwrap();
 
         let watcher = super::DirWatcher::new(
             temp_dir.path().to_str().unwrap(),
-            std::sync::mpsc::channel().0,
+            index_event_sender,
             temp_dir.path().join(".zk_index/last_run_time"),
             Box::new(file_has_hidden_component),
         );
@@ -232,7 +238,7 @@ mod tests {
     #[test]
     fn test_relative_path_from_absolute_path() {
         use std::path::PathBuf;
-        let (dir, watcher) = setup_watcher();
+        let (dir, watcher) = setup_watcher(std::sync::mpsc::channel().0);
 
         assert_eq!(
             watcher.relative_path_from_absolute_path(&dir.path().join(".zk_index/")),
@@ -263,9 +269,26 @@ mod tests {
         assert!(file_has_hidden_component(Path::new("/tmp/test/.test")));
         assert!(file_has_hidden_component(Path::new("/tmp/test/.test/test")));
 
+        proptest!(|(components in prop::collection::vec("[^/\0.][^/\0]*", 1..20))| {
+            // Random component is hidden.
+            let mut components = components;
+            let random_index = rand::random::<usize>() % components.len();
+            components[random_index] = format!(".{}", components[random_index]);
+
+            let str_path = components.join("/");
+            let path = Path::new(&str_path);
+            assert!(file_has_hidden_component(path));
+        });
+
         // Non-hidden files.
         assert!(!file_has_hidden_component(Path::new("./test")));
         assert!(!file_has_hidden_component(Path::new("/tmp/test")));
-        assert!(!file_has_hidden_component(Path::new("/tmp/test/test")))
+        assert!(!file_has_hidden_component(Path::new("/tmp/test/test")));
+
+        proptest!(|(components in prop::collection::vec("[^/\0.][^/\0]*", 1..20))| {
+            let str_path = components.join("/");
+            let path = Path::new(&str_path);
+            assert!(!file_has_hidden_component(path));
+        });
     }
 }
