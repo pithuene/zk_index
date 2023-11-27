@@ -255,11 +255,6 @@ mod tests {
     }
 
     #[test]
-    fn test_false() {
-        assert!(false);
-    }
-
-    #[test]
     fn test_relative_path_from_absolute_path() {
         use std::path::PathBuf;
         let (dir, watcher) = setup_watcher(std::sync::mpsc::channel().0);
