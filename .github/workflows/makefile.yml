@@ -7,15 +7,12 @@ on:
     branches: [ "master" ]
 
 jobs:
-  build:
-
+  tests:
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v3
-    
-    - name: Install jupyter
-      run: sudo apt-get install jupyter-notebook jupyter-nbconvert
-
-    - name: Run tests
-      run: make test
+    - uses: cachix/install-nix-action@v22
+      with:
+        nix_path: nixpkgs=channel:nixos-unstable
+    - run: nix build
+    - run: nix flake check
