@@ -3,6 +3,7 @@
 diesel::table! {
     file (path) {
         path -> Text,
+        last_indexed -> Integer,
     }
 }
 

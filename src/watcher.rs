@@ -4,11 +4,13 @@
 
 use notify::{recommended_watcher, RecommendedWatcher, RecursiveMode, Watcher};
 use std::{
-    io::Read,
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::mpsc::{channel, Receiver, Sender},
     time::UNIX_EPOCH,
 };
+
+use crate::sqlite::with_db_conn;
 
 #[derive(Clone, Debug)]
 pub enum IndexEvent {
@@ -22,13 +24,12 @@ pub struct DirWatcher {
     watcher: RecommendedWatcher,
     file_event_receiver: Receiver<Result<notify::Event, notify::Error>>,
     index_event_sender: Sender<IndexEvent>,
-    last_run_time_file_path: PathBuf,
     /// Function which is passed to the watcher to configure a file filter.
     file_filter: Box<dyn Fn(&Path) -> bool>,
 }
 
-pub fn file_has_hidden_component(path: &Path) -> bool {
-    path.components().any(|c| {
+pub fn file_has_no_hidden_component(path: &Path) -> bool {
+    !path.components().any(|c| {
         c.as_os_str().to_str().unwrap().starts_with('.')
             && c.as_os_str().to_str().unwrap().len() > 1
     })
@@ -38,15 +39,12 @@ impl DirWatcher {
     pub fn new(
         path: &str,
         index_event_sender: Sender<IndexEvent>,
-        last_run_time_file_path: PathBuf,
         file_filter: Box<dyn Fn(&Path) -> bool>,
     ) -> Self {
         let path = Path::new(path);
 
         let (tx, rx) = channel();
-        let config = notify::Config::default()
-            .with_poll_interval(std::time::Duration::from_secs(1))
-            .with_compare_contents(false);
+        let config = notify::Config::default().with_compare_contents(false);
         let mut watcher: RecommendedWatcher = recommended_watcher(tx).unwrap();
         watcher.configure(config).unwrap();
 
@@ -55,35 +53,30 @@ impl DirWatcher {
             watcher,
             file_event_receiver: rx,
             index_event_sender,
-            last_run_time_file_path,
             file_filter,
         }
     }
 
-    /// Read last run time from file.
-    fn read_last_run_time(&mut self) -> u64 {
-        // Open the last run time file.
-        let mut last_run_time_file = std::fs::OpenOptions::new()
-            .read(true)
-            .open(&self.last_run_time_file_path)
-            .unwrap();
+    /// Sync the filesystem and the index.
+    /// Iterate over all files in the vault and check if they have been modified
+    /// since the last run.
+    fn sync_fs_and_index(&mut self) {
+        use diesel::RunQueryDsl;
 
-        let mut last_run_file_content = String::new();
-        last_run_time_file
-            .read_to_string(&mut last_run_file_content)
-            .ok()
-            .map_or(0, |_| last_run_file_content.parse::<u64>().unwrap_or(0))
-    }
-
-    pub fn start(&mut self) {
-        self.watcher
-            .watch(&self.vault_root_path, RecursiveMode::Recursive)
-            .unwrap();
-
-        // Find all files which have been modified since the last run.
-
-        // Unix timestamp of the last run.
-        let last_run_time = self.read_last_run_time();
+        // Get the last run times from the database.
+        // As the directory is traversed, the entries are removed from this map.
+        // At the end, all remaining entries must have been deleted while the
+        // indexer was not running and are therefore removed from the index.
+        let mut file_map: HashMap<String, i32> = HashMap::new();
+        with_db_conn(|conn| {
+            for f in crate::sqlite::schema::file::dsl::file
+                .load::<crate::sqlite::models::File>(conn)
+                .unwrap()
+                .into_iter()
+            {
+                file_map.insert(f.path, f.last_indexed);
+            }
+        });
 
         // Recursively walk the vault directory and find all files.
         for entry in walkdir::WalkDir::new(&self.vault_root_path) {
@@ -97,14 +90,35 @@ impl DirWatcher {
                     .unwrap()
                     .as_secs();
 
-                if modified > last_run_time {
-                    let rel_path = self.relative_path_from_absolute_path(entry.path());
+                let rel_path = self.relative_path_from_absolute_path(entry.path());
+                let last_indexed = file_map.remove(rel_path.to_str().unwrap()).unwrap_or(0);
+
+                if last_indexed < modified.try_into().unwrap() {
+                    log::debug!(
+                        "File {:?} has been modified at {} which is after the last index time {}.",
+                        entry.path(),
+                        modified,
+                        last_indexed
+                    );
                     self.emit_index_event(IndexEvent::Remove(rel_path.clone()));
                     self.emit_index_event(IndexEvent::Add(rel_path));
                 }
             }
         }
-        // TODO: You need to iterate over all files in the index too, and check, if they still exist.
+
+        // All remaining entries in the file map have been deleted while the
+        // indexer was not running and are now removed from the index.
+        for (rel_path, _) in file_map {
+            self.emit_index_event(IndexEvent::Remove(rel_path.into()));
+        }
+    }
+
+    pub fn start(&mut self) {
+        self.watcher
+            .watch(&self.vault_root_path, RecursiveMode::Recursive)
+            .unwrap();
+
+        self.sync_fs_and_index();
 
         loop {
             match self.file_event_receiver.recv().unwrap() {
@@ -200,6 +214,12 @@ impl DirWatcher {
     }
 
     fn relative_path_from_absolute_path(&self, absolute_path: &Path) -> PathBuf {
+        assert!(
+            absolute_path.starts_with(&self.vault_root_path),
+            "Path {:?} is not a subpath of the vault root path {:?}.",
+            absolute_path,
+            self.vault_root_path
+        );
         absolute_path
             .strip_prefix(&self.vault_root_path)
             .unwrap()
@@ -211,7 +231,7 @@ impl DirWatcher {
 mod tests {
     use std::sync::mpsc::Sender;
 
-    use crate::watcher::file_has_hidden_component;
+    use crate::watcher::file_has_no_hidden_component;
     use proptest::prelude::*;
 
     use super::IndexEvent;
@@ -225,8 +245,7 @@ mod tests {
         let watcher = super::DirWatcher::new(
             temp_dir.path().to_str().unwrap(),
             index_event_sender,
-            temp_dir.path().join(".zk_index/last_run_time"),
-            Box::new(file_has_hidden_component),
+            Box::new(file_has_no_hidden_component),
         );
         (temp_dir, watcher)
     }
@@ -263,11 +282,13 @@ mod tests {
         use std::path::Path;
 
         // Hidden files.
-        assert!(file_has_hidden_component(Path::new("./.test")));
-        assert!(file_has_hidden_component(Path::new("/tmp/.test")));
-        assert!(file_has_hidden_component(Path::new("/tmp/.test/test")));
-        assert!(file_has_hidden_component(Path::new("/tmp/test/.test")));
-        assert!(file_has_hidden_component(Path::new("/tmp/test/.test/test")));
+        assert!(!file_has_no_hidden_component(Path::new("./.test")));
+        assert!(!file_has_no_hidden_component(Path::new("/tmp/.test")));
+        assert!(!file_has_no_hidden_component(Path::new("/tmp/.test/test")));
+        assert!(!file_has_no_hidden_component(Path::new("/tmp/test/.test")));
+        assert!(!file_has_no_hidden_component(Path::new(
+            "/tmp/test/.test/test"
+        )));
 
         proptest!(|(components in prop::collection::vec("[^/\0.][^/\0]*", 1..20))| {
             // Random component is hidden.
@@ -277,18 +298,18 @@ mod tests {
 
             let str_path = components.join("/");
             let path = Path::new(&str_path);
-            assert!(file_has_hidden_component(path));
+            assert!(!file_has_no_hidden_component(path));
         });
 
         // Non-hidden files.
-        assert!(!file_has_hidden_component(Path::new("./test")));
-        assert!(!file_has_hidden_component(Path::new("/tmp/test")));
-        assert!(!file_has_hidden_component(Path::new("/tmp/test/test")));
+        assert!(file_has_no_hidden_component(Path::new("./test")));
+        assert!(file_has_no_hidden_component(Path::new("/tmp/test")));
+        assert!(file_has_no_hidden_component(Path::new("/tmp/test/test")));
 
         proptest!(|(components in prop::collection::vec("[^/\0.][^/\0]*", 1..20))| {
             let str_path = components.join("/");
             let path = Path::new(&str_path);
-            assert!(!file_has_hidden_component(path));
+            assert!(file_has_no_hidden_component(path));
         });
     }
 }

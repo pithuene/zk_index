@@ -6,6 +6,7 @@ use diesel::prelude::*;
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct File {
     pub path: String,
+    pub last_indexed: i32,
 }
 
 /// A note, has a vault path and a foreign key to a file.

@@ -1,12 +1,12 @@
 use clap::{Arg, Command};
 use env_logger::Builder;
 use std::{path::Path, sync::mpsc::channel, thread};
-use watcher::file_has_hidden_component;
+use watcher::file_has_no_hidden_component;
 
 mod indexer;
 pub mod note;
 mod sqlite;
-use sqlite::SqliteIndex;
+use sqlite::{db_connect, SqliteIndex};
 mod watcher;
 
 fn main() {
@@ -36,15 +36,14 @@ fn main() {
         std::fs::create_dir(&index_dir).unwrap();
     }
 
-    // The file in which the last index time is stored.
-    let last_run_time_file = index_dir.join("last_run_time");
+    db_connect(&index_dir.join("index.db"));
 
     let (index_event_sender, index_event_receiver) = channel::<watcher::IndexEvent>();
 
     let indexer_task = thread::spawn(|| {
         let mut indexer = indexer::Indexer::new(
             vec![
-                Box::new(SqliteIndex::new(index_dir)),
+                Box::new(SqliteIndex::new()),
                 Box::new(sqlite::note_index::NoteIndex {}),
             ],
             index_event_receiver,
@@ -55,15 +54,10 @@ fn main() {
     });
 
     // Ignore hidden files or files in hidden directories.
-    let file_filter = Box::new(file_has_hidden_component);
+    let file_filter = Box::new(file_has_no_hidden_component);
 
     let watcher_task = thread::spawn(move || {
-        let mut watcher = watcher::DirWatcher::new(
-            &root_dir,
-            index_event_sender,
-            last_run_time_file,
-            file_filter,
-        );
+        let mut watcher = watcher::DirWatcher::new(&root_dir, index_event_sender, file_filter);
         log::info!("Watcher starting.");
         watcher.start();
         log::info!("Watcher stopped.");
