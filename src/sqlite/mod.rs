@@ -73,6 +73,14 @@ impl IndexExt for SqliteIndex {
                 .execute(conn)
                 .unwrap();
 
+            new_note.set::<Option<String>>(
+                "extension",
+                new_note
+                    .rel_path
+                    .extension()
+                    .map(|ext| ext.to_str().unwrap().to_owned()),
+            );
+
             // TODO: Remove this. It's just for testing the data passing between extension.
             new_note.set::<PathBuf>(
                 "vault_path",

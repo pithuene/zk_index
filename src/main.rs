@@ -1,12 +1,17 @@
 use clap::{Arg, Command};
 use env_logger::Builder;
-use std::{path::Path, sync::mpsc::channel, thread};
+use std::{
+    path::{Path, PathBuf},
+    sync::mpsc::channel,
+    thread,
+};
 use watcher::file_has_no_hidden_component;
 
 mod indexer;
 pub mod note;
 mod sqlite;
 use sqlite::{db_connect, SqliteIndex};
+mod markdown_index;
 mod watcher;
 
 fn main() {
@@ -40,24 +45,31 @@ fn main() {
 
     let (index_event_sender, index_event_receiver) = channel::<watcher::IndexEvent>();
 
-    let indexer_task = thread::spawn(|| {
-        let mut indexer = indexer::Indexer::new(
-            vec![
-                Box::new(SqliteIndex::new()),
-                Box::new(sqlite::note_index::NoteIndex {}),
-            ],
-            index_event_receiver,
-        );
-        log::info!("Indexer starting.");
-        indexer.start();
-        log::info!("Indexer stopped.");
-    });
+    let indexer_task = {
+        let root_dir = root_dir.clone();
+        thread::spawn(move || {
+            let mut indexer = indexer::Indexer::new(
+                PathBuf::from(root_dir),
+                vec![
+                    Box::new(SqliteIndex::new()),
+                    Box::new(sqlite::note_index::NoteIndex {}),
+                    Box::new(markdown_index::MarkdownIndex {}),
+                    Box::new(markdown_index::LinkIndex {}),
+                ],
+                index_event_receiver,
+            );
+            log::info!("Indexer starting.");
+            indexer.start();
+            log::info!("Indexer stopped.");
+        })
+    };
 
     // Ignore hidden files or files in hidden directories.
     let file_filter = Box::new(file_has_no_hidden_component);
 
     let watcher_task = thread::spawn(move || {
-        let mut watcher = watcher::DirWatcher::new(&root_dir, index_event_sender, file_filter);
+        let mut watcher =
+            watcher::DirWatcher::new(&root_dir.clone(), index_event_sender, file_filter);
         log::info!("Watcher starting.");
         watcher.start();
         log::info!("Watcher stopped.");

@@ -8,6 +8,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    link (from, to, text) {
+        from -> Text,
+        to -> Text,
+        text -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
     note (file) {
         vault_path -> Text,
         file -> Text,
@@ -16,4 +24,4 @@ diesel::table! {
 
 diesel::joinable!(note -> file (file));
 
-diesel::allow_tables_to_appear_in_same_query!(file, note,);
+diesel::allow_tables_to_appear_in_same_query!(file, link, note,);

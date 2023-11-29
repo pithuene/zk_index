@@ -1,7 +1,4 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::mpsc::Receiver,
-};
+use std::{path::PathBuf, sync::mpsc::Receiver};
 
 use crate::{
     note::Note,
@@ -18,16 +15,19 @@ pub trait IndexExt {
 }
 
 pub struct Indexer {
+    vault_root_path: PathBuf,
     index_extensions: Vec<Box<dyn IndexExt>>,
     index_event_receiver: Receiver<watcher::IndexEvent>,
 }
 
 impl Indexer {
     pub fn new(
+        vault_root_path: PathBuf,
         extensions: Vec<Box<dyn IndexExt>>,
         index_event_receiver: Receiver<watcher::IndexEvent>,
     ) -> Self {
         Self {
+            vault_root_path,
             index_extensions: extensions,
             index_event_receiver,
         }
@@ -42,7 +42,10 @@ impl Indexer {
             match self.index_event_receiver.recv().unwrap() {
                 watcher::IndexEvent::Add(rel_path) => {
                     log::debug!("Adding note to index: {:?}", rel_path);
-                    let mut note = self.read_note_file(&rel_path);
+                    let mut note = Note::new(&rel_path);
+
+                    note.set::<PathBuf>("absolute_path", self.vault_root_path.join(&rel_path));
+
                     self.index_extensions.iter_mut().for_each(|index| {
                         index.index(&mut note);
                     });
@@ -55,9 +58,5 @@ impl Indexer {
                 }
             }
         }
-    }
-
-    fn read_note_file(&self, rel_path: &Path) -> Note {
-        Note::new(rel_path)
     }
 }

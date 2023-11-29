@@ -17,6 +17,11 @@ impl Note {
     }
 
     pub fn set<T: 'static>(&mut self, key: &str, value: T) {
+        assert!(
+            !self.data.contains_key(key),
+            "Key {} already exists in note.",
+            key
+        );
         self.data
             .insert(key.to_owned(), (TypeId::of::<T>(), Box::new(value)));
     }
