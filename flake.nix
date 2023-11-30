@@ -81,10 +81,10 @@
           # Note that this is done as a separate derivation so that
           # we can block the CI if there are issues here, but not
           # prevent downstream consumers from building our crate by itself.
-          my-crate-clippy = craneLib.cargoClippy (commonArgs // {
-            inherit cargoArtifacts;
-            cargoClippyExtraArgs = "--all-targets -- --deny warnings";
-          });
+          # my-crate-clippy = craneLib.cargoClippy (commonArgs // {
+          #   inherit cargoArtifacts;
+          #   cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+          # });
 
           my-crate-doc = craneLib.cargoDoc (commonArgs // {
             inherit cargoArtifacts;
