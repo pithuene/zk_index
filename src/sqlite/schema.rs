@@ -12,6 +12,8 @@ diesel::table! {
         from -> Text,
         to -> Text,
         text -> Nullable<Text>,
+        start -> Integer,
+        end -> Integer,
     }
 }
 
@@ -22,6 +24,7 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(link -> note (from));
 diesel::joinable!(note -> file (file));
 
 diesel::allow_tables_to_appear_in_same_query!(file, link, note,);

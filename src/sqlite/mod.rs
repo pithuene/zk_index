@@ -5,6 +5,7 @@ use std::time::UNIX_EPOCH;
 
 use crate::indexer::IndexExt;
 use crate::note;
+use anyhow::{anyhow, Result};
 use diesel::connection::Connection;
 use diesel::prelude::*;
 use once_cell::sync::Lazy;
@@ -21,12 +22,17 @@ pub fn db_connect(db_path: &Path) {
     CONNECTION.lock().unwrap().replace(conn);
 }
 
-pub fn with_db_conn<F, T>(f: F) -> T
+pub fn with_db_conn<F, T>(f: F) -> Result<T>
 where
-    F: FnOnce(&mut SqliteConnection) -> T,
+    F: FnOnce(&mut SqliteConnection) -> Result<T>,
 {
-    let mut conn_opt = crate::sqlite::CONNECTION.lock().unwrap();
-    let conn = conn_opt.as_mut().unwrap();
+    let mut maybe_conn = match crate::sqlite::CONNECTION.lock() {
+        Ok(guard) => guard,
+        Err(_) => Err(anyhow!("Failed to lock connection mutex"))?,
+    };
+    let conn = maybe_conn
+        .as_mut()
+        .ok_or(anyhow!("Connection not initialized"))?;
     f(conn)
 }
 
@@ -41,7 +47,7 @@ impl SqliteIndex {
 impl IndexExt for SqliteIndex {
     fn init(&mut self) {
         log::info!("SqliteIndex init");
-        with_db_conn(|conn| {
+        let _ = with_db_conn(|conn| {
             diesel::sql_query(
                 r#"
                     CREATE TABLE IF NOT EXISTS file (
@@ -53,6 +59,7 @@ impl IndexExt for SqliteIndex {
             )
             .execute(conn)
             .unwrap();
+            Ok(())
         });
     }
 

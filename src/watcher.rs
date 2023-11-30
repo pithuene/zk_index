@@ -37,12 +37,10 @@ pub fn file_has_no_hidden_component(path: &Path) -> bool {
 
 impl DirWatcher {
     pub fn new(
-        path: &str,
+        path: &Path,
         index_event_sender: Sender<IndexEvent>,
         file_filter: Box<dyn Fn(&Path) -> bool>,
     ) -> Self {
-        let path = Path::new(path);
-
         let (tx, rx) = channel();
         let config = notify::Config::default().with_compare_contents(false);
         let mut watcher: RecommendedWatcher = recommended_watcher(tx).unwrap();
@@ -67,16 +65,14 @@ impl DirWatcher {
         // As the directory is traversed, the entries are removed from this map.
         // At the end, all remaining entries must have been deleted while the
         // indexer was not running and are therefore removed from the index.
-        let mut file_map: HashMap<String, i32> = HashMap::new();
-        with_db_conn(|conn| {
-            for f in crate::sqlite::schema::file::dsl::file
-                .load::<crate::sqlite::models::File>(conn)
-                .unwrap()
+        let mut file_map: HashMap<String, i32> = with_db_conn(|conn| {
+            Ok(crate::sqlite::schema::file::dsl::file
+                .load::<crate::sqlite::models::File>(conn)?
                 .into_iter()
-            {
-                file_map.insert(f.path, f.last_indexed);
-            }
-        });
+                .map(|file| (file.path, file.last_indexed))
+                .collect())
+        })
+        .unwrap_or(HashMap::new());
 
         // Recursively walk the vault directory and find all files.
         for entry in walkdir::WalkDir::new(&self.vault_root_path) {
@@ -113,17 +109,25 @@ impl DirWatcher {
         }
     }
 
-    pub fn start(&mut self) {
+    pub fn start(&mut self, timeout: Option<std::time::Duration>) {
         self.watcher
             .watch(&self.vault_root_path, RecursiveMode::Recursive)
             .unwrap();
+        log::info!("Started watcher.");
 
+        log::info!("Syncing filesystem and index.");
         self.sync_fs_and_index();
+        log::info!("Finished syncing filesystem and index.");
 
         loop {
-            match self.file_event_receiver.recv().unwrap() {
-                Ok(event) => self.handle_event(event),
-                Err(e) => log::error!("INotifyWatcher error: {:?}", e),
+            let event = match timeout {
+                Some(time) => self.file_event_receiver.recv_timeout(time).ok(),
+                None => self.file_event_receiver.recv().ok(),
+            };
+            match event {
+                None => break, // Channel closed.
+                Some(Ok(event)) => self.handle_event(event),
+                Some(Err(e)) => log::error!("INotifyWatcher error: {:?}", e),
             }
         }
     }
@@ -243,9 +247,9 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
 
         let watcher = super::DirWatcher::new(
-            temp_dir.path().to_str().unwrap(),
+            temp_dir.path(),
             index_event_sender,
-            Box::new(file_has_no_hidden_component),
+            Box::from(file_has_no_hidden_component),
         );
         (temp_dir, watcher)
     }

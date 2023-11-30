@@ -1,4 +1,8 @@
-use std::{path::PathBuf, sync::mpsc::Receiver};
+use anyhow::Result;
+use std::{
+    path::PathBuf,
+    sync::mpsc::{Receiver, RecvError, RecvTimeoutError},
+};
 
 use crate::{
     note::Note,
@@ -17,15 +21,19 @@ pub trait IndexExt {
 pub struct Indexer {
     vault_root_path: PathBuf,
     index_extensions: Vec<Box<dyn IndexExt>>,
-    index_event_receiver: Receiver<watcher::IndexEvent>,
+    pub index_event_receiver: Receiver<watcher::IndexEvent>,
 }
 
 impl Indexer {
     pub fn new(
         vault_root_path: PathBuf,
-        extensions: Vec<Box<dyn IndexExt>>,
+        mut extensions: Vec<Box<dyn IndexExt>>,
         index_event_receiver: Receiver<watcher::IndexEvent>,
     ) -> Self {
+        // Initialize all extensions
+        extensions.iter_mut().for_each(|index| {
+            index.init();
+        });
         Self {
             vault_root_path,
             index_extensions: extensions,
@@ -33,29 +41,48 @@ impl Indexer {
         }
     }
 
+    fn handle_single_event(&mut self, event: watcher::IndexEvent) {
+        match event {
+            watcher::IndexEvent::Add(rel_path) => {
+                let mut note = Note::new(&rel_path);
+
+                note.set::<PathBuf>("absolute_path", self.vault_root_path.join(&rel_path));
+
+                self.index_extensions.iter_mut().for_each(|index| {
+                    index.index(&mut note);
+                });
+                log::info!("Indexed file: {:?}", rel_path);
+            }
+            watcher::IndexEvent::Remove(rel_path) => {
+                self.index_extensions.iter_mut().for_each(|index| {
+                    index.remove(rel_path.clone());
+                });
+                log::info!("Removed file: {:?}", rel_path);
+            }
+        }
+    }
+
+    /// Handle index events in an infinite loop.
+    /// If you only want to handle the current events, use `process` instead.
     pub fn start(&mut self) {
-        // Initialize all extensions
-        self.index_extensions.iter_mut().for_each(|index| {
-            index.init();
-        });
         loop {
-            match self.index_event_receiver.recv().unwrap() {
-                watcher::IndexEvent::Add(rel_path) => {
-                    log::debug!("Adding note to index: {:?}", rel_path);
-                    let mut note = Note::new(&rel_path);
+            self.handle_single_event(self.index_event_receiver.recv().unwrap());
+        }
+    }
 
-                    note.set::<PathBuf>("absolute_path", self.vault_root_path.join(&rel_path));
-
-                    self.index_extensions.iter_mut().for_each(|index| {
-                        index.index(&mut note);
-                    });
-                }
-                watcher::IndexEvent::Remove(rel_path) => {
-                    log::debug!("Removing note from index: {:?}", rel_path);
-                    self.index_extensions.iter_mut().for_each(|index| {
-                        index.remove(rel_path.clone());
-                    });
-                }
+    /// Used for testing.
+    /// Handle all remaining events until the queue is empty.
+    ///
+    /// If you want to handle events continuously, use `start` instead.
+    pub fn process(&mut self) -> Result<()> {
+        loop {
+            match self
+                .index_event_receiver
+                .recv_timeout(std::time::Duration::from_millis(100))
+            {
+                Ok(event) => self.handle_single_event(event),
+                Err(RecvTimeoutError::Timeout) => return Ok(()),
+                Err(RecvTimeoutError::Disconnected) => return Err(RecvError.into()),
             }
         }
     }

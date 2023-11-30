@@ -24,4 +24,6 @@ pub struct Link {
     pub from: String,
     pub to: String,
     pub text: Option<String>,
+    pub start: i32,
+    pub end: i32,
 }
