@@ -62,7 +62,7 @@ impl IndexExt<note::Note> for SqliteIndex {
         });
     }
 
-    fn index<'b>(&mut self, new_note: &'b note::Note) {
+    fn index(&mut self, new_note: &note::Note) {
         let _ = with_db_conn(|conn| {
             let now = std::time::SystemTime::now()
                 .duration_since(UNIX_EPOCH)

@@ -32,7 +32,9 @@ fn indexer_start(
     thread::spawn(move || {
         let mut indexer = indexer_create(vault_root_path, index_event_receiver);
         log::info!("Initializing index extensions.");
+
         indexer.init();
+
         log::info!("Index extensions initialized.");
         log::info!("Indexer starting.");
         indexer.start();
@@ -112,7 +114,7 @@ mod tests {
     use crate::{
         indexer::IndexExt,
         indexer_create,
-        sqlite::{db_connect, with_db_conn},
+        sqlite::{db_connect, models::Link, with_db_conn},
         watcher::{self},
         watcher_start, INDEX_DIR_NAME, SQL_INDEX_NAME,
     };
@@ -150,7 +152,9 @@ mod tests {
         let mut indexer = indexer_create(temp_dir.path().to_owned(), index_event_receiver);
         log::info!("Created indexer.");
         log::info!("Initializing index extensions.");
+
         indexer.init();
+
         log::info!("Index extensions initialized.");
 
         indexer.process()?;
@@ -161,7 +165,7 @@ mod tests {
             use crate::sqlite::schema::link::dsl::*;
             use diesel::RunQueryDsl;
 
-            let links = link.load::<crate::sqlite::models::Link>(conn).unwrap();
+            let links = link.load::<Link>(conn).unwrap();
 
             assert_eq!(links.len(), 2);
             assert!(links
@@ -183,7 +187,7 @@ mod tests {
             use crate::sqlite::schema::link::dsl::*;
             use diesel::RunQueryDsl;
 
-            let links = link.load::<crate::sqlite::models::Link>(conn).unwrap();
+            let links = link.load::<Link>(conn).unwrap();
 
             assert_eq!(links.len(), 3);
             assert!(links

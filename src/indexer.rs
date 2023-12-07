@@ -7,42 +7,40 @@ use std::{
 use crate::{
     markdown_index::MarkdownIndex,
     note::Note,
-    sqlite::SqliteIndex,
+    sqlite::{note_index::NoteIndex, SqliteIndex},
     watcher::{self},
 };
 
-pub trait IndexExt<N> {
+pub trait IndexExt<I> {
     // Called to initialize the index if it doesn't exist yet.
     fn init(&mut self);
     // Called to add a note to the index.
-    fn index<'b>(&mut self, note: &'b N);
+    fn index(&mut self, note: &I);
     // Called to remove a note from the index.
     fn remove(&mut self, path: &Path);
 }
 
 pub struct Indexer {
     vault_root_path: PathBuf,
-    child_extensions: Vec<Box<dyn IndexExt<Note>>>,
     pub index_event_receiver: Receiver<watcher::IndexEvent>,
+    child_extensions: Vec<Box<dyn IndexExt<Note>>>,
 }
 
 impl IndexExt<Note> for Indexer {
     fn init(&mut self) {
-        for ext in self.child_extensions.iter_mut() {
-            ext.init();
-        }
+        self.child_extensions.iter_mut().for_each(|ext| ext.init());
     }
 
-    fn index<'b>(&mut self, new_note: &'b Note) {
-        self.child_extensions.iter_mut().for_each(|ext| {
-            ext.index(new_note);
-        });
+    fn index(&mut self, new_note: &Note) {
+        self.child_extensions
+            .iter_mut()
+            .for_each(|ext| ext.index(new_note));
     }
 
     fn remove(&mut self, path: &Path) {
-        self.child_extensions.iter_mut().for_each(|ext| {
-            ext.remove(path);
-        });
+        self.child_extensions
+            .iter_mut()
+            .for_each(|ext| ext.remove(path));
     }
 }
 
@@ -56,6 +54,7 @@ impl Indexer {
             index_event_receiver,
             child_extensions: vec![
                 Box::from(SqliteIndex::new()),
+                Box::from(NoteIndex::new()),
                 Box::from(MarkdownIndex::new()),
             ],
         }
@@ -65,7 +64,9 @@ impl Indexer {
         match event {
             watcher::IndexEvent::Add(rel_path) => {
                 let note = Note::new(&self.vault_root_path, &rel_path);
+
                 self.index(&note);
+
                 log::info!("Indexed file: {:?}", rel_path);
             }
             watcher::IndexEvent::Remove(rel_path) => {

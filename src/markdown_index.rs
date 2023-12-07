@@ -34,13 +34,11 @@ pub struct MarkdownNote<'a> {
 
 impl IndexExt<note::Note> for MarkdownIndex {
     fn init(&mut self) {
-        for ext in self.child_extensions.iter_mut() {
-            ext.init();
-        }
+        self.child_extensions.iter_mut().for_each(|ext| ext.init());
     }
 
     /// Read markdown files and parse them into a markdown AST.
-    fn index<'b>(&mut self, new_note: &'b note::Note) {
+    fn index(&mut self, new_note: &note::Note) {
         // If the note is a markdown file
         match &new_note.extension {
             Some(ext) if ext == "md" => {
@@ -50,18 +48,18 @@ impl IndexExt<note::Note> for MarkdownIndex {
                     note: new_note,
                     markdown: md,
                 };
-                for ext in self.child_extensions.iter_mut() {
-                    ext.index(&md_note);
-                }
+                self.child_extensions
+                    .iter_mut()
+                    .for_each(|ext| ext.index(&md_note));
             }
             _ => {}
         }
     }
 
     fn remove(&mut self, rel_path: &Path) {
-        for ext in self.child_extensions.iter_mut() {
-            ext.remove(rel_path);
-        }
+        self.child_extensions
+            .iter_mut()
+            .for_each(|ext| ext.remove(rel_path));
     }
 }
 
@@ -81,7 +79,7 @@ fn link_url_to_rel_path(link_url: &str) -> String {
     without_prefix.to_owned()
 }
 
-impl IndexExt<MarkdownNote<'_>> for LinkIndex {
+impl<'a> IndexExt<MarkdownNote<'a>> for LinkIndex {
     fn init(&mut self) {
         let _ = with_db_conn(|conn| {
             diesel::sql_query(
@@ -102,7 +100,7 @@ impl IndexExt<MarkdownNote<'_>> for LinkIndex {
         });
     }
 
-    fn index<'b>(&mut self, md_note: &'b MarkdownNote<'b>) {
+    fn index(&mut self, md_note: &MarkdownNote<'a>) {
         use markdown_it::plugins::cmark::inline;
 
         let mut links = Vec::new();

@@ -4,9 +4,15 @@ use crate::indexer::IndexExt;
 use crate::note;
 use diesel::prelude::*;
 
-use super::{models, schema, CONNECTION};
+use super::{models, schema, with_db_conn, CONNECTION};
 
 pub struct NoteIndex {}
+
+impl NoteIndex {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
 
 impl IndexExt<note::Note> for NoteIndex {
     fn init(&mut self) {
@@ -26,8 +32,8 @@ impl IndexExt<note::Note> for NoteIndex {
         }
     }
 
-    fn index<'b>(&mut self, new_note: &'b note::Note) {
-        if let Some(conn) = CONNECTION.lock().unwrap().as_mut() {
+    fn index(&mut self, new_note: &note::Note) {
+        let _ = with_db_conn(|conn| {
             let new_row = models::Note {
                 file: new_note.rel_path.to_str().unwrap().to_owned(),
                 vault_path: new_note.vault_path.to_str().unwrap().to_owned(),
@@ -35,18 +41,18 @@ impl IndexExt<note::Note> for NoteIndex {
 
             diesel::insert_into(schema::note::table)
                 .values(&new_row)
-                .execute(conn)
-                .unwrap();
-        }
+                .execute(conn)?;
+            Ok(())
+        });
     }
 
     fn remove(&mut self, path: &Path) {
-        if let Some(conn) = CONNECTION.lock().unwrap().as_mut() {
+        let _ = with_db_conn(|conn| {
             use schema::note::dsl::*;
             diesel::delete(schema::note::table)
                 .filter(file.eq(path.to_str().unwrap()))
-                .execute(conn)
-                .unwrap();
-        }
+                .execute(conn)?;
+            Ok(())
+        });
     }
 }
