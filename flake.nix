@@ -58,6 +58,7 @@
             "cargo"
             "llvm-tools"
             "rustc"
+            "rust-src"
           ]);
 
         # Build *just* the cargo dependencies, so we can reuse
@@ -132,6 +133,7 @@
 
           # Additional dev-shell environment variables can be set directly
           # MY_CUSTOM_DEVELOPMENT_VAR = "something else";
+          RUST_SRC_PATH = "${fenix.packages.${system}.complete.rust-src}/lib/rustlib/src/rust/library";
 
           # Extra inputs can be added here; cargo and rustc are provided by default.
           packages = [
