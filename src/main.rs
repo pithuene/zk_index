@@ -10,7 +10,9 @@ use watcher::{file_has_no_hidden_component, IndexEvent};
 mod indexer;
 pub mod note;
 mod sqlite;
-use sqlite::{db_connect, SqliteIndex};
+use sqlite::db_connect;
+
+use crate::indexer::IndexExt;
 mod markdown_index;
 mod watcher;
 
@@ -19,16 +21,7 @@ fn indexer_create(
     vault_root_path: PathBuf,
     index_event_receiver: Receiver<IndexEvent>,
 ) -> indexer::Indexer {
-    indexer::Indexer::new(
-        vault_root_path,
-        vec![
-            Box::new(SqliteIndex::new()),
-            Box::new(sqlite::note_index::NoteIndex {}),
-            Box::new(markdown_index::MarkdownIndex::new()),
-            Box::new(markdown_index::LinkIndex {}),
-        ],
-        index_event_receiver,
-    )
+    indexer::Indexer::new(vault_root_path, index_event_receiver)
 }
 
 /// Create and start the indexer in a new thread.
@@ -38,6 +31,9 @@ fn indexer_start(
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut indexer = indexer_create(vault_root_path, index_event_receiver);
+        log::info!("Initializing index extensions.");
+        indexer.init();
+        log::info!("Index extensions initialized.");
         log::info!("Indexer starting.");
         indexer.start();
         log::info!("Indexer stopped.");
@@ -114,6 +110,7 @@ mod tests {
     use anyhow::{anyhow, Result};
 
     use crate::{
+        indexer::IndexExt,
         indexer_create,
         sqlite::{db_connect, with_db_conn},
         watcher::{self},
@@ -152,8 +149,10 @@ mod tests {
         log::info!("Started watcher.");
         let mut indexer = indexer_create(temp_dir.path().to_owned(), index_event_receiver);
         log::info!("Created indexer.");
+        log::info!("Initializing index extensions.");
+        indexer.init();
+        log::info!("Index extensions initialized.");
 
-        indexer.process()?;
         indexer.process()?;
         log::info!("Processed initial events.");
 

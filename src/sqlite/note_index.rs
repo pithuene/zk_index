@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::Path;
 
 use crate::indexer::IndexExt;
 use crate::note;
@@ -8,7 +8,7 @@ use super::{models, schema, CONNECTION};
 
 pub struct NoteIndex {}
 
-impl IndexExt for NoteIndex {
+impl IndexExt<note::Note> for NoteIndex {
     fn init(&mut self) {
         if let Some(conn) = CONNECTION.lock().unwrap().as_mut() {
             diesel::sql_query(
@@ -26,16 +26,11 @@ impl IndexExt for NoteIndex {
         }
     }
 
-    fn index(&mut self, new_note: &mut note::Note) {
+    fn index<'b>(&mut self, new_note: &'b note::Note) {
         if let Some(conn) = CONNECTION.lock().unwrap().as_mut() {
             let new_row = models::Note {
                 file: new_note.rel_path.to_str().unwrap().to_owned(),
-                vault_path: new_note
-                    .get::<PathBuf>("vault_path")
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .to_owned(),
+                vault_path: new_note.vault_path.to_str().unwrap().to_owned(),
             };
 
             diesel::insert_into(schema::note::table)
@@ -45,7 +40,7 @@ impl IndexExt for NoteIndex {
         }
     }
 
-    fn remove(&mut self, path: PathBuf) {
+    fn remove(&mut self, path: &Path) {
         if let Some(conn) = CONNECTION.lock().unwrap().as_mut() {
             use schema::note::dsl::*;
             diesel::delete(schema::note::table)

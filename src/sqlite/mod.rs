@@ -1,5 +1,5 @@
 use diesel::RunQueryDsl;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
 
@@ -44,7 +44,7 @@ impl SqliteIndex {
     }
 }
 
-impl IndexExt for SqliteIndex {
+impl IndexExt<note::Note> for SqliteIndex {
     fn init(&mut self) {
         log::info!("SqliteIndex init");
         let _ = with_db_conn(|conn| {
@@ -57,14 +57,13 @@ impl IndexExt for SqliteIndex {
                     )
                 "#,
             )
-            .execute(conn)
-            .unwrap();
+            .execute(conn)?;
             Ok(())
         });
     }
 
-    fn index(&mut self, new_note: &mut note::Note) {
-        if let Some(conn) = CONNECTION.lock().unwrap().as_mut() {
+    fn index<'b>(&mut self, new_note: &'b note::Note) {
+        let _ = with_db_conn(|conn| {
             let now = std::time::SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
@@ -77,41 +76,18 @@ impl IndexExt for SqliteIndex {
 
             diesel::insert_into(schema::file::table)
                 .values(&new_file)
-                .execute(conn)
-                .unwrap();
-
-            new_note.set::<Option<String>>(
-                "extension",
-                new_note
-                    .rel_path
-                    .extension()
-                    .map(|ext| ext.to_str().unwrap().to_owned()),
-            );
-
-            // TODO: Remove this. It's just for testing the data passing between extension.
-            new_note.set::<PathBuf>(
-                "vault_path",
-                vault_path_from_relative_path(&new_note.rel_path),
-            );
-        }
+                .execute(conn)?;
+            Ok(())
+        });
     }
 
-    fn remove(&mut self, rel_path: PathBuf) {
-        if let Some(conn) = CONNECTION.lock().unwrap().as_mut() {
+    fn remove(&mut self, rel_path: &Path) {
+        let _ = with_db_conn(|conn| {
             use schema::file::dsl::*;
             diesel::delete(schema::file::table)
                 .filter(path.eq(rel_path.to_str().unwrap()))
-                .execute(conn)
-                .unwrap();
-        }
-    }
-}
-
-// TODO: This should not stay here
-fn vault_path_from_relative_path(rel_path: &Path) -> PathBuf {
-    match rel_path.extension() {
-        // with_extension("") removes the extension
-        Some(ext) if ext == "md" => rel_path.with_extension(""),
-        _ => rel_path.to_path_buf(),
+                .execute(conn)?;
+            Ok(())
+        });
     }
 }

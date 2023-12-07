@@ -1,62 +1,75 @@
 use anyhow::Result;
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::mpsc::{Receiver, RecvError, RecvTimeoutError},
 };
 
 use crate::{
+    markdown_index::MarkdownIndex,
     note::Note,
+    sqlite::SqliteIndex,
     watcher::{self},
 };
 
-pub trait IndexExt {
+pub trait IndexExt<N> {
     // Called to initialize the index if it doesn't exist yet.
     fn init(&mut self);
     // Called to add a note to the index.
-    fn index(&mut self, note: &mut Note);
+    fn index<'b>(&mut self, note: &'b N);
     // Called to remove a note from the index.
-    fn remove(&mut self, path: PathBuf);
+    fn remove(&mut self, path: &Path);
 }
 
 pub struct Indexer {
     vault_root_path: PathBuf,
-    index_extensions: Vec<Box<dyn IndexExt>>,
+    child_extensions: Vec<Box<dyn IndexExt<Note>>>,
     pub index_event_receiver: Receiver<watcher::IndexEvent>,
+}
+
+impl IndexExt<Note> for Indexer {
+    fn init(&mut self) {
+        for ext in self.child_extensions.iter_mut() {
+            ext.init();
+        }
+    }
+
+    fn index<'b>(&mut self, new_note: &'b Note) {
+        self.child_extensions.iter_mut().for_each(|ext| {
+            ext.index(new_note);
+        });
+    }
+
+    fn remove(&mut self, path: &Path) {
+        self.child_extensions.iter_mut().for_each(|ext| {
+            ext.remove(path);
+        });
+    }
 }
 
 impl Indexer {
     pub fn new(
         vault_root_path: PathBuf,
-        mut extensions: Vec<Box<dyn IndexExt>>,
         index_event_receiver: Receiver<watcher::IndexEvent>,
     ) -> Self {
-        // Initialize all extensions
-        extensions.iter_mut().for_each(|index| {
-            index.init();
-        });
         Self {
             vault_root_path,
-            index_extensions: extensions,
             index_event_receiver,
+            child_extensions: vec![
+                Box::from(SqliteIndex::new()),
+                Box::from(MarkdownIndex::new()),
+            ],
         }
     }
 
     fn handle_single_event(&mut self, event: watcher::IndexEvent) {
         match event {
             watcher::IndexEvent::Add(rel_path) => {
-                let mut note = Note::new(&rel_path);
-
-                note.set::<PathBuf>("absolute_path", self.vault_root_path.join(&rel_path));
-
-                self.index_extensions.iter_mut().for_each(|index| {
-                    index.index(&mut note);
-                });
+                let note = Note::new(&self.vault_root_path, &rel_path);
+                self.index(&note);
                 log::info!("Indexed file: {:?}", rel_path);
             }
             watcher::IndexEvent::Remove(rel_path) => {
-                self.index_extensions.iter_mut().for_each(|index| {
-                    index.remove(rel_path.clone());
-                });
+                self.remove(&rel_path);
                 log::info!("Removed file: {:?}", rel_path);
             }
         }
@@ -74,6 +87,7 @@ impl Indexer {
     /// Handle all remaining events until the queue is empty.
     ///
     /// If you want to handle events continuously, use `start` instead.
+    #[allow(dead_code)]
     pub fn process(&mut self) -> Result<()> {
         loop {
             match self

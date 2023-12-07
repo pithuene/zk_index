@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use diesel::{ExpressionMethods, RunQueryDsl};
 use markdown_it::Node;
 
@@ -9,6 +11,7 @@ use crate::{
 
 pub struct MarkdownIndex {
     parser: markdown_it::MarkdownIt,
+    child_extensions: Vec<Box<dyn for<'a> IndexExt<MarkdownNote<'a>>>>,
 }
 
 impl MarkdownIndex {
@@ -17,32 +20,58 @@ impl MarkdownIndex {
         markdown_it::plugins::cmark::add(&mut parser);
         markdown_it::plugins::extra::add(&mut parser);
 
-        Self { parser }
+        Self {
+            parser,
+            child_extensions: vec![Box::new(LinkIndex::new())],
+        }
     }
 }
 
-impl IndexExt for MarkdownIndex {
-    fn init(&mut self) {}
+pub struct MarkdownNote<'a> {
+    pub note: &'a note::Note,
+    pub markdown: Node,
+}
+
+impl IndexExt<note::Note> for MarkdownIndex {
+    fn init(&mut self) {
+        for ext in self.child_extensions.iter_mut() {
+            ext.init();
+        }
+    }
 
     /// Read markdown files and parse them into a markdown AST.
-    fn index(&mut self, new_note: &mut note::Note) {
+    fn index<'b>(&mut self, new_note: &'b note::Note) {
         // If the note is a markdown file
-        match new_note.get::<Option<String>>("extension").unwrap() {
+        match &new_note.extension {
             Some(ext) if ext == "md" => {
-                let absolute_path = new_note.get::<std::path::PathBuf>("absolute_path").unwrap();
-                let content = std::fs::read_to_string(absolute_path).unwrap();
+                let content = std::fs::read_to_string(&new_note.absolute_path).unwrap();
                 let md = self.parser.parse(&content);
-                new_note.set::<String>("content", content);
-                new_note.set::<Node>("markdown", md);
+                let md_note = MarkdownNote {
+                    note: new_note,
+                    markdown: md,
+                };
+                for ext in self.child_extensions.iter_mut() {
+                    ext.index(&md_note);
+                }
             }
             _ => {}
         }
     }
 
-    fn remove(&mut self, _: std::path::PathBuf) {}
+    fn remove(&mut self, rel_path: &Path) {
+        for ext in self.child_extensions.iter_mut() {
+            ext.remove(rel_path);
+        }
+    }
 }
 
 pub struct LinkIndex {}
+
+impl LinkIndex {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
 
 /// Link urls may be internal links, in which case this function cleans them, or external links (like webpages), in which case this function leaves them unchanged.
 /// Internal links may start with `./` which is undesired and are often times url encoded.
@@ -52,7 +81,7 @@ fn link_url_to_rel_path(link_url: &str) -> String {
     without_prefix.to_owned()
 }
 
-impl IndexExt for LinkIndex {
+impl IndexExt<MarkdownNote<'_>> for LinkIndex {
     fn init(&mut self) {
         let _ = with_db_conn(|conn| {
             diesel::sql_query(
@@ -68,49 +97,44 @@ impl IndexExt for LinkIndex {
                     )
                 "#,
             )
-            .execute(conn)
-            .unwrap();
+            .execute(conn)?;
             Ok(())
         });
     }
 
-    fn index(&mut self, new_note: &mut note::Note) {
+    fn index<'b>(&mut self, md_note: &'b MarkdownNote<'b>) {
         use markdown_it::plugins::cmark::inline;
 
-        if let Some(md) = new_note.get::<Node>("markdown") {
-            let mut links = Vec::new();
-            md.walk(|node, _| {
-                if node.is::<inline::link::Link>() {
-                    let link = node.cast::<inline::link::Link>().unwrap();
-                    let (start, end) = node.srcmap.unwrap().get_byte_offsets();
-                    links.push(models::Link {
-                        from: new_note.rel_path.to_str().unwrap().to_owned(),
-                        to: link_url_to_rel_path(&link.url),
-                        text: None, // TODO
-                        start: start.try_into().unwrap(),
-                        end: end.try_into().unwrap(),
-                    });
-                }
-            });
+        let mut links = Vec::new();
+        md_note.markdown.walk(|node, _| {
+            if node.is::<inline::link::Link>() {
+                let link = node.cast::<inline::link::Link>().unwrap();
+                let (start, end) = node.srcmap.unwrap().get_byte_offsets();
+                links.push(models::Link {
+                    from: md_note.note.rel_path.to_str().unwrap().to_owned(),
+                    to: link_url_to_rel_path(&link.url),
+                    text: None, // TODO
+                    start: start.try_into().unwrap(),
+                    end: end.try_into().unwrap(),
+                });
+            }
+        });
 
-            // Insert all links into the database.
-            let _ = with_db_conn(|conn| {
-                diesel::insert_into(schema::link::table)
-                    .values(links)
-                    .execute(conn)
-                    .unwrap();
-                Ok(())
-            });
-        }
+        // Insert all links into the database.
+        let _ = with_db_conn(|conn| {
+            diesel::insert_into(schema::link::table)
+                .values(links)
+                .execute(conn)?;
+            Ok(())
+        });
     }
 
-    fn remove(&mut self, rel_path: std::path::PathBuf) {
+    fn remove(&mut self, rel_path: &Path) {
         let _ = with_db_conn(|conn| {
             use schema::link::dsl::*;
             diesel::delete(schema::link::table)
                 .filter(from.eq(rel_path.to_str().unwrap()))
-                .execute(conn)
-                .unwrap();
+                .execute(conn)?;
             Ok(())
         });
     }
