@@ -2,16 +2,17 @@
   description = "Build a cargo project";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    nixpkgs-unstable.url = "nixpkgs/nixos-unstable"; 
+    nixpkgs.url = "nixpkgs/nixos-23.05";
 
     crane = {
       url = "github:ipetkov/crane";
-      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.nixpkgs.follows = "nixpkgs-unstable";
     };
 
     fenix = {
       url = "github:nix-community/fenix";
-      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.nixpkgs.follows = "nixpkgs-unstable";
       inputs.rust-analyzer-src.follows = "";
     };
 
@@ -134,17 +135,14 @@
           # Additional dev-shell environment variables can be set directly
           # MY_CUSTOM_DEVELOPMENT_VAR = "something else";
           RUST_SRC_PATH = "${fenix.packages.${system}.complete.rust-src}/lib/rustlib/src/rust/library";
-          LD_LIBRARY_PATH = "${pkgs.stdenv.cc.cc.lib}/lib";
+          LD_LIBRARY_PATH = lib.makeLibraryPath [
+            pkgs.stdenv.cc.cc # Required for FastEmbed onnxruntime
+          ];
 
           # Extra inputs can be added here; cargo and rustc are provided by default.
           packages = [
             pkgs.pkg-config
             pkgs.sqlite
-
-            pkgs.nodejs
-            pkgs.glibc
-            pkgs.stdenv.cc.cc.lib
-            pkgs.onnxruntime
           ];
         };
       });
