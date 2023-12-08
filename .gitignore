@@ -4,3 +4,4 @@ models
 .vscode
 __pycache__
 index.db
+local_cache

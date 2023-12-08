@@ -6,7 +6,7 @@ use markdown_it::Node;
 use crate::{
     indexer::IndexExt,
     note,
-    sqlite::{models, schema, with_db_conn},
+    sqlite::{embedding_index::EmbeddingIndex, models, schema, with_db_conn},
 };
 
 pub struct MarkdownIndex {
@@ -22,7 +22,7 @@ impl MarkdownIndex {
 
         Self {
             parser,
-            child_extensions: vec![Box::new(LinkIndex::new())],
+            child_extensions: vec![Box::new(LinkIndex::new()), Box::new(EmbeddingIndex::new())],
         }
     }
 }

@@ -134,11 +134,17 @@
           # Additional dev-shell environment variables can be set directly
           # MY_CUSTOM_DEVELOPMENT_VAR = "something else";
           RUST_SRC_PATH = "${fenix.packages.${system}.complete.rust-src}/lib/rustlib/src/rust/library";
+          LD_LIBRARY_PATH = "${pkgs.stdenv.cc.cc.lib}/lib";
 
           # Extra inputs can be added here; cargo and rustc are provided by default.
           packages = [
             pkgs.pkg-config
             pkgs.sqlite
+
+            pkgs.nodejs
+            pkgs.glibc
+            pkgs.stdenv.cc.cc.lib
+            pkgs.onnxruntime
           ];
         };
       });

@@ -10,6 +10,7 @@ use diesel::connection::Connection;
 use diesel::prelude::*;
 use once_cell::sync::Lazy;
 
+pub mod embedding_index;
 pub mod models;
 pub mod note_index;
 pub mod schema;
