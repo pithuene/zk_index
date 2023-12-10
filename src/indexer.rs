@@ -5,30 +5,44 @@ use std::{
 };
 
 use crate::{
-    markdown_index::MarkdownIndex,
     note::Note,
-    sqlite::{note_index::NoteIndex, SqliteIndex},
+    sqlite::SqliteIndex,
     watcher::{self},
 };
 
-pub trait IndexExt<I> {
+pub trait IndexExt<'a> {
+    type InitCfg;
+    type NoteIn;
     // Called to initialize the index if it doesn't exist yet.
-    fn init(&mut self);
+    fn init(&mut self, config: &Self::InitCfg);
     // Called to add a note to the index.
-    fn index(&mut self, note: &I);
+    fn index(&mut self, note: &Self::NoteIn);
     // Called to remove a note from the index.
     fn remove(&mut self, path: &Path);
 }
 
-pub struct Indexer {
-    vault_root_path: PathBuf,
-    pub index_event_receiver: Receiver<watcher::IndexEvent>,
-    child_extensions: Vec<Box<dyn IndexExt<Note>>>,
+#[derive(Debug, Clone)]
+pub struct IndexerInitConfig {
+    pub vault_root_path: PathBuf,
+    pub index_dir: PathBuf,
 }
 
-impl IndexExt<Note> for Indexer {
-    fn init(&mut self) {
-        self.child_extensions.iter_mut().for_each(|ext| ext.init());
+pub struct Indexer {
+    pub vault_root_path: PathBuf,
+    pub index_event_receiver: Receiver<watcher::IndexEvent>,
+    pub child_extensions:
+        Vec<Box<dyn for<'a> IndexExt<'a, InitCfg = IndexerInitConfig, NoteIn = Note>>>,
+}
+
+impl IndexExt<'_> for Indexer {
+    type InitCfg = IndexerInitConfig;
+    type NoteIn = Note;
+
+    fn init(&mut self, config: &Self::InitCfg) {
+        log::info!("Index extension Indexer initialized.");
+        self.child_extensions
+            .iter_mut()
+            .for_each(|ext| ext.init(config));
     }
 
     fn index(&mut self, new_note: &Note) {
@@ -52,11 +66,7 @@ impl Indexer {
         Self {
             vault_root_path,
             index_event_receiver,
-            child_extensions: vec![
-                Box::from(SqliteIndex::new()),
-                Box::from(NoteIndex::new()),
-                Box::from(MarkdownIndex::new()),
-            ],
+            child_extensions: vec![Box::from(SqliteIndex::new())],
         }
     }
 

@@ -1,17 +1,21 @@
-use std::path::Path;
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
-use diesel::{ExpressionMethods, RunQueryDsl};
+use diesel::{ExpressionMethods, RunQueryDsl, SqliteConnection};
 use markdown_it::Node;
 
 use crate::{
     indexer::IndexExt,
     note,
-    sqlite::{embedding_index::EmbeddingIndex, models, schema, with_db_conn},
+    sqlite::{embedding_index::EmbeddingIndex, models, schema, SqliteInitConfig},
 };
 
 pub struct MarkdownIndex {
     parser: markdown_it::MarkdownIt,
-    child_extensions: Vec<Box<dyn for<'a> IndexExt<MarkdownNote<'a>>>>,
+    child_extensions:
+        Vec<Box<dyn for<'a> IndexExt<'a, InitCfg = SqliteInitConfig, NoteIn = MarkdownNote<'a>>>>,
 }
 
 impl MarkdownIndex {
@@ -32,9 +36,15 @@ pub struct MarkdownNote<'a> {
     pub markdown: Node,
 }
 
-impl IndexExt<note::Note> for MarkdownIndex {
-    fn init(&mut self) {
-        self.child_extensions.iter_mut().for_each(|ext| ext.init());
+impl IndexExt<'_> for MarkdownIndex {
+    type InitCfg = SqliteInitConfig;
+    type NoteIn = note::Note;
+
+    fn init(&mut self, config: &Self::InitCfg) {
+        log::info!("Index extension MarkdownIndex initialized.");
+        self.child_extensions
+            .iter_mut()
+            .for_each(|ext| ext.init(config));
     }
 
     /// Read markdown files and parse them into a markdown AST.
@@ -63,11 +73,13 @@ impl IndexExt<note::Note> for MarkdownIndex {
     }
 }
 
-pub struct LinkIndex {}
+pub struct LinkIndex {
+    conn: Option<Arc<Mutex<SqliteConnection>>>,
+}
 
 impl LinkIndex {
     pub fn new() -> Self {
-        Self {}
+        Self { conn: None }
     }
 }
 
@@ -79,11 +91,16 @@ fn link_url_to_rel_path(link_url: &str) -> String {
     without_prefix.to_owned()
 }
 
-impl<'a> IndexExt<MarkdownNote<'a>> for LinkIndex {
-    fn init(&mut self) {
-        let _ = with_db_conn(|conn| {
-            diesel::sql_query(
-                r#"
+impl<'a> IndexExt<'a> for LinkIndex {
+    type InitCfg = SqliteInitConfig;
+    type NoteIn = MarkdownNote<'a>;
+
+    fn init(&mut self, config: &Self::InitCfg) {
+        self.conn = Some(Arc::clone(&config.conn));
+
+        let mut conn = self.conn.as_ref().unwrap().lock().unwrap();
+        diesel::sql_query(
+            r#"
                     CREATE TABLE IF NOT EXISTS link (
                         "from" TEXT NOT NULL,
                         "to" TEXT NOT NULL,
@@ -94,10 +111,10 @@ impl<'a> IndexExt<MarkdownNote<'a>> for LinkIndex {
                         FOREIGN KEY("from") REFERENCES note (file)
                     )
                 "#,
-            )
-            .execute(conn)?;
-            Ok(())
-        });
+        )
+        .execute(&mut *conn)
+        .unwrap();
+        log::info!("Index extension LinkIndex initialized.");
     }
 
     fn index(&mut self, md_note: &MarkdownNote<'a>) {
@@ -119,21 +136,19 @@ impl<'a> IndexExt<MarkdownNote<'a>> for LinkIndex {
         });
 
         // Insert all links into the database.
-        let _ = with_db_conn(|conn| {
-            diesel::insert_into(schema::link::table)
-                .values(links)
-                .execute(conn)?;
-            Ok(())
-        });
+        let mut conn = self.conn.as_ref().unwrap().lock().unwrap();
+        diesel::insert_into(schema::link::table)
+            .values(links)
+            .execute(&mut *conn)
+            .unwrap();
     }
 
     fn remove(&mut self, rel_path: &Path) {
-        let _ = with_db_conn(|conn| {
-            use schema::link::dsl::*;
-            diesel::delete(schema::link::table)
-                .filter(from.eq(rel_path.to_str().unwrap()))
-                .execute(conn)?;
-            Ok(())
-        });
+        let mut conn = self.conn.as_ref().unwrap().lock().unwrap();
+        use schema::link::dsl::*;
+        diesel::delete(schema::link::table)
+            .filter(from.eq(rel_path.to_str().unwrap()))
+            .execute(&mut *conn)
+            .unwrap();
     }
 }

@@ -4,26 +4,39 @@ use fastembed::{EmbeddingBase, EmbeddingModel, FlagEmbedding, InitOptions};
 
 use crate::{indexer::IndexExt, markdown_index::MarkdownNote};
 
+use super::SqliteInitConfig;
+
 pub struct EmbeddingIndex {
-    model: FlagEmbedding,
+    model: Option<FlagEmbedding>,
 }
 
 impl EmbeddingIndex {
     pub fn new() -> Self {
-        let model: FlagEmbedding = FlagEmbedding::try_new(InitOptions {
-            model_name: EmbeddingModel::MLE5Large,
-            show_download_message: true,
-            ..Default::default()
-        })
-        .unwrap();
-
-        Self { model }
+        Self { model: None }
     }
 }
 
-impl<'a> IndexExt<MarkdownNote<'a>> for EmbeddingIndex {
-    fn init(&mut self) {
-        // TODO
+pub const EMBEDDING_MODEL_DIR: &str = "embedding_models";
+
+#[cfg(test)]
+pub const EMBEDDING_MODEL_NAME: &str = "fast-multilingual-e5-large";
+
+impl<'a> IndexExt<'a> for EmbeddingIndex {
+    type InitCfg = SqliteInitConfig;
+    type NoteIn = MarkdownNote<'a>;
+
+    fn init(&mut self, config: &Self::InitCfg) {
+        log::info!("Initializing embedding index");
+        let model: FlagEmbedding = FlagEmbedding::try_new(InitOptions {
+            model_name: EmbeddingModel::MLE5Large,
+            show_download_message: true,
+            cache_dir: config.index_dir.join(EMBEDDING_MODEL_DIR),
+            ..Default::default()
+        })
+        .unwrap();
+        self.model = Some(model);
+        log::info!("Embedding model initialized");
+        log::info!("Index extension EmbeddingIndex initialized.");
     }
 
     fn index(&mut self, new_note: &MarkdownNote<'a>) {
@@ -37,13 +50,18 @@ impl<'a> IndexExt<MarkdownNote<'a>> for EmbeddingIndex {
         println!("{:?}", passages);
 
         // Get the embeddings for each sentence.
-        let embeddings = self.model.passage_embed(passages, None).unwrap();
+        let embeddings = self
+            .model
+            .as_mut()
+            .unwrap()
+            .passage_embed(passages, None)
+            .unwrap();
         println!("{:?}", embeddings);
 
         // TODO
     }
 
-    fn remove(&mut self, rel_path: &Path) {
+    fn remove(&mut self, _rel_path: &Path) {
         // TODO
     }
 }

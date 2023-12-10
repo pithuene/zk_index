@@ -2,6 +2,7 @@
 //! adds the necessary IndexEvents to a channel, which can then be consumed by
 //! the Indexer.
 
+use diesel::{Connection, SqliteConnection};
 use notify::{recommended_watcher, RecommendedWatcher, RecursiveMode, Watcher};
 use std::{
     collections::HashMap,
@@ -10,7 +11,7 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-use crate::sqlite::with_db_conn;
+use crate::{indexer::IndexerInitConfig, sqlite::SQL_INDEX_NAME};
 
 #[derive(Clone, Debug)]
 pub enum IndexEvent {
@@ -20,7 +21,8 @@ pub enum IndexEvent {
 }
 
 pub struct DirWatcher {
-    vault_root_path: Box<Path>,
+    vault_root_path: PathBuf,
+    db_path: PathBuf,
     watcher: RecommendedWatcher,
     file_event_receiver: Receiver<Result<notify::Event, notify::Error>>,
     index_event_sender: Sender<IndexEvent>,
@@ -37,17 +39,18 @@ pub fn file_has_no_hidden_component(path: &Path) -> bool {
 
 impl DirWatcher {
     pub fn new(
-        path: &Path,
+        config: &IndexerInitConfig,
         index_event_sender: Sender<IndexEvent>,
         file_filter: Box<dyn Fn(&Path) -> bool>,
     ) -> Self {
         let (tx, rx) = channel();
-        let config = notify::Config::default().with_compare_contents(false);
+        let notify_config = notify::Config::default().with_compare_contents(false);
         let mut watcher: RecommendedWatcher = recommended_watcher(tx).unwrap();
-        watcher.configure(config).unwrap();
+        watcher.configure(notify_config).unwrap();
 
         Self {
-            vault_root_path: Box::from(path),
+            vault_root_path: config.vault_root_path.clone(),
+            db_path: config.index_dir.join(SQL_INDEX_NAME),
             watcher,
             file_event_receiver: rx,
             index_event_sender,
@@ -61,18 +64,23 @@ impl DirWatcher {
     fn sync_fs_and_index(&mut self) {
         use diesel::RunQueryDsl;
 
+        // Open a connection to the database.
+        let mut conn: SqliteConnection =
+            Connection::establish(self.db_path.to_str().unwrap()).unwrap();
+
         // Get the last run times from the database.
         // As the directory is traversed, the entries are removed from this map.
         // At the end, all remaining entries must have been deleted while the
         // indexer was not running and are therefore removed from the index.
-        let mut file_map: HashMap<String, i32> = with_db_conn(|conn| {
-            Ok(crate::sqlite::schema::file::dsl::file
-                .load::<crate::sqlite::models::File>(conn)?
-                .into_iter()
-                .map(|file| (file.path, file.last_indexed))
-                .collect())
-        })
-        .unwrap_or(HashMap::new());
+        let mut file_map: HashMap<String, i32> = crate::sqlite::schema::file::dsl::file
+            .load::<crate::sqlite::models::File>(&mut conn)
+            .map_or(HashMap::new(), |files| {
+                files
+                    .into_iter()
+                    .map(|file| (file.path, file.last_indexed))
+                    .collect()
+            });
+        drop(conn);
 
         // Recursively walk the vault directory and find all files.
         for entry in walkdir::WalkDir::new(&self.vault_root_path) {
@@ -235,7 +243,9 @@ impl DirWatcher {
 mod tests {
     use std::sync::mpsc::Sender;
 
-    use crate::watcher::file_has_no_hidden_component;
+    use crate::{
+        indexer::IndexerInitConfig, watcher::file_has_no_hidden_component, INDEX_DIR_NAME,
+    };
     use proptest::prelude::*;
 
     use super::IndexEvent;
@@ -247,7 +257,10 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
 
         let watcher = super::DirWatcher::new(
-            temp_dir.path(),
+            &IndexerInitConfig {
+                vault_root_path: temp_dir.path().to_path_buf(),
+                index_dir: temp_dir.path().join(INDEX_DIR_NAME),
+            },
             index_event_sender,
             Box::from(file_has_no_hidden_component),
         );

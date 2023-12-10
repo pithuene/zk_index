@@ -1,94 +1,124 @@
 use diesel::RunQueryDsl;
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
-use crate::indexer::IndexExt;
+use crate::indexer::{IndexExt, IndexerInitConfig};
 use crate::note;
-use anyhow::{anyhow, Result};
 use diesel::connection::Connection;
 use diesel::prelude::*;
-use once_cell::sync::Lazy;
 
 pub mod embedding_index;
 pub mod models;
 pub mod note_index;
 pub mod schema;
 
-pub static CONNECTION: Lazy<Arc<Mutex<Option<SqliteConnection>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(None)));
+pub const SQL_INDEX_NAME: &str = "index.db";
 
-pub fn db_connect(db_path: &Path) {
-    let conn: SqliteConnection = Connection::establish(db_path.to_str().unwrap()).unwrap();
-    CONNECTION.lock().unwrap().replace(conn);
+pub struct SqliteInitConfig {
+    pub vault_root_path: PathBuf,
+    pub index_dir: PathBuf,
+    pub db_path: PathBuf,
+    pub conn: Arc<Mutex<SqliteConnection>>,
 }
 
-pub fn with_db_conn<F, T>(f: F) -> Result<T>
-where
-    F: FnOnce(&mut SqliteConnection) -> Result<T>,
-{
-    let mut maybe_conn = match crate::sqlite::CONNECTION.lock() {
-        Ok(guard) => guard,
-        Err(_) => Err(anyhow!("Failed to lock connection mutex"))?,
-    };
-    let conn = maybe_conn
-        .as_mut()
-        .ok_or(anyhow!("Connection not initialized"))?;
-    f(conn)
+pub struct SqliteIndex {
+    // Use an Arc<Mutex<SqliteConnection>> instead of a RefCell<SqliteConnection>
+    // in case we want to handle multiple index events in parallel.
+    pub conn: Option<Arc<Mutex<SqliteConnection>>>,
+    pub child_extensions:
+        Vec<Box<dyn for<'a> IndexExt<'a, InitCfg = SqliteInitConfig, NoteIn = note::Note>>>,
 }
-
-pub struct SqliteIndex {}
 
 impl SqliteIndex {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            conn: None,
+            child_extensions: vec![Box::new(note_index::NoteIndex::new())],
+        }
     }
 }
 
-impl IndexExt<note::Note> for SqliteIndex {
-    fn init(&mut self) {
+impl IndexExt<'_> for SqliteIndex {
+    type InitCfg = IndexerInitConfig;
+    type NoteIn = note::Note;
+
+    fn init(&mut self, config: &Self::InitCfg) {
         log::info!("SqliteIndex init");
-        let _ = with_db_conn(|conn| {
-            diesel::sql_query(
-                r#"
-                    CREATE TABLE IF NOT EXISTS file (
-                        path TEXT NOT NULL,
-                        last_indexed INTEGER NOT NULL,
-                        PRIMARY KEY(path)
-                    )
-                "#,
+
+        let db_path = config.index_dir.join(SQL_INDEX_NAME);
+
+        self.conn = Some(Arc::new(Mutex::new(
+            Connection::establish(db_path.to_str().unwrap()).unwrap(),
+        )));
+        let mut conn = self.conn.as_ref().unwrap().lock().unwrap();
+
+        diesel::sql_query(
+            r#"
+            CREATE TABLE IF NOT EXISTS file (
+                path TEXT NOT NULL,
+                last_indexed INTEGER NOT NULL,
+                PRIMARY KEY(path)
             )
-            .execute(conn)?;
-            Ok(())
-        });
+            "#,
+        )
+        .execute(&mut *conn)
+        .unwrap();
+
+        let child_config = SqliteInitConfig {
+            vault_root_path: config.vault_root_path.clone(),
+            index_dir: config.index_dir.clone(),
+            db_path,
+            conn: Arc::clone(self.conn.as_ref().unwrap()),
+        };
+
+        log::info!("Index extension SqliteIndex initialized.");
+
+        // TODO: I have to come up with a better abstraction around the database connection.
+        // This pattern occurs in every extension that uses the database and has children.
+        // If I ever forget to drop the connection, I'll have a deadlock.
+        drop(conn);
+        self.child_extensions
+            .iter_mut()
+            .for_each(|ext| ext.init(&child_config));
     }
 
     fn index(&mut self, new_note: &note::Note) {
-        let _ = with_db_conn(|conn| {
-            let now = std::time::SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-            let new_file = models::File {
-                path: new_note.rel_path.to_str().unwrap().to_owned(),
-                // Set last_indexed to the current time.
-                last_indexed: now.try_into().unwrap(),
-            };
+        let mut conn = self.conn.as_ref().unwrap().lock().unwrap();
 
-            diesel::insert_into(schema::file::table)
-                .values(&new_file)
-                .execute(conn)?;
-            Ok(())
-        });
+        let now = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let new_file = models::File {
+            path: new_note.rel_path.to_str().unwrap().to_owned(),
+            // Set last_indexed to the current time.
+            last_indexed: now.try_into().unwrap(),
+        };
+
+        diesel::insert_into(schema::file::table)
+            .values(&new_file)
+            .execute(&mut *conn)
+            .unwrap();
+
+        drop(conn);
+        self.child_extensions
+            .iter_mut()
+            .for_each(|ext| ext.index(new_note));
     }
 
     fn remove(&mut self, rel_path: &Path) {
-        let _ = with_db_conn(|conn| {
-            use schema::file::dsl::*;
-            diesel::delete(schema::file::table)
-                .filter(path.eq(rel_path.to_str().unwrap()))
-                .execute(conn)?;
-            Ok(())
-        });
+        use schema::file::dsl::*;
+        let mut conn = self.conn.as_ref().unwrap().lock().unwrap();
+        diesel::delete(schema::file::table)
+            .filter(path.eq(rel_path.to_str().unwrap()))
+            .execute(&mut *conn)
+            .unwrap();
+
+        drop(conn);
+        self.child_extensions
+            .iter_mut()
+            .for_each(|ext| ext.remove(rel_path));
     }
 }
