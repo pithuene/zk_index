@@ -16,16 +16,16 @@ task: {
   note: text
   status: text
   content: text
-  due_date: text
-  done_date: text
+  due_date: text? {constraint: nullable}
+  done_date: text? {constraint: nullable}
 }
 
 link_: link {
   shape: sql_table
-  from: text
+  from: text {constraint: primary_key}
   to: text
   text: text? {constraint: nullable}
-  start: integer
+  start: integer {constraint: primary_key}
   end: integer
 }
 

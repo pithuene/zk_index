@@ -8,5 +8,5 @@
 shopt -s nullglob
 for file in ./docs/assets/*.d2; do
   # Compile the .d2 file to .svg and add it to the commit
-  d2 "$file" "${file%.d2}.svg" && git add "${file%.d2}.svg"
+  d2 --layout=elk "$file" "${file%.d2}.svg" && git add "${file%.d2}.svg"
 done

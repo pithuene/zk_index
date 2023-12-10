@@ -2,7 +2,8 @@
 
 ![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)
 
-This is a Python tool designed to manage and maintain an index of a markdown note graph as used by systems like [Obsidian](https://obsidian.md). It continuously monitors the notes and updates the index, which is stored as an SQLite database. 
+This is a Rust application designed to manage and maintain an index of a markdown note graph as used by systems like [Obsidian](https://obsidian.md).
+It continuously monitors the notes and updates the index, which is stored as an SQLite database. 
 This makes searching your notes easier and more flexible (because you can use SQL) as well as much faster (because you don't have to process all note files for each query).
 
 ## Features
@@ -49,33 +50,25 @@ WHERE property.key = 'type' AND property.value = 'book';
 
 The index database is structured as follows:
 
-```mermaid
-erDiagram
-    note {
-        path TEXT
-    }
-    link {
-        from TEXT
-        to TEXT
-    }
-    property {
-        note TEXT
-        key TEXT
-        value TEXT
-    }
-    task {
-        note TEXT
-        status TEXT
-        content TEXT
-        due_date TEXT
-        done_date TEXT
-    }
+![SQL Schema](docs/assets/sql_schema.svg)
 
-    link 1 -- 1 note : "from"
-    link 1 -- 1 note : "to"
-    property zero or more -- 1 note : note
-    task zero or more -- 1 note : note
-```
+## Architecture
+
+### Index Extensions
+
+The indexer is designed to be easily extended with new features.
+To accomplish this, the various indexing tasks are split into separate modules, called index extensions.
+Each extension can write a specific feature (e.g. backlinks, tasks, etc.) to the index database, and / or perform preprocessing for further extensions (like markdown parsing).
+
+The extensions form a tree, where each extension calls the extensions which depend on its preprocessing.
+Currently, the following extensions are implemented:
+
+- `Indexer` — The root, does nothing.
+  - `SqliteIndex` — Creates the SQLite database, manages the connection and creates the `file` table.
+    - `NoteIndex` — Creates the `note` table. Separate from `MarkdownIndex` because at some point there might be non-markdown notes.
+      - `MarkdownIndex` — Parses markdown files. Creates the `link` and `property` tables.
+        - `LinkIndex` — Creates the `link` table.
+        - `EmbeddingIndex` — Creates text embeddings for notes to enable similarity search.
 
 ## License
 
