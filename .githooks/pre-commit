@@ -1,0 +1,12 @@
+#! /usr/bin/env nix-shell
+#! nix-shell --pure
+#! nix-shell -I nixpkgs=https://github.com/NixOS/nixpkgs/archive/nixos-unstable.tar.gz
+#! nix-shell -p d2 git
+#! nix-shell -i bash
+
+# Compile all .d2 files in docs/assets to .svg files
+shopt -s nullglob
+for file in ./docs/assets/*.d2; do
+  # Compile the .d2 file to .svg and add it to the commit
+  d2 "$file" "${file%.d2}.svg" && git add "${file%.d2}.svg"
+done

@@ -1,0 +1,41 @@
+file: {
+  shape: sql_table
+  path: text {constraint: primary_key}
+  last_indexed: integer
+}
+
+property: {
+  shape: sql_table
+  note: text
+  key: text
+  value: text
+}
+
+task: {
+  shape: sql_table
+  note: text
+  status: text
+  content: text
+  due_date: text
+  done_date: text
+}
+
+link_: link {
+  shape: sql_table
+  from: text
+  to: text
+  text: text? {constraint: nullable}
+  start: integer
+  end: integer
+}
+
+note: {
+  shape: sql_table
+  vault_path: text
+  file: text {constraint: primary_key}
+}
+
+note.file -> file.path
+link_.from -> note.file
+property.note -> note.file
+task.note -> note.file
