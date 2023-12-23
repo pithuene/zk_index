@@ -1962,6 +1962,7 @@ dependencies = [
  "once_cell",
  "proptest",
  "rand",
+ "regex",
  "tempfile",
  "urlencoding",
  "walkdir",

@@ -13,8 +13,10 @@ pub mod note;
 mod sqlite;
 
 use crate::indexer::IndexExt;
+mod link_index;
 mod markdown_index;
 mod watcher;
+mod wikilink_parser;
 
 /// Create the indexer, but don't start it.
 fn indexer_create(
@@ -117,6 +119,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use std::{
+        env,
         fs::File,
         io::Write,
         path::{Path, PathBuf},
@@ -125,6 +128,7 @@ mod tests {
 
     use anyhow::{anyhow, Result};
     use diesel::{Connection, SqliteConnection};
+    use env_logger::Builder;
     use fastembed::{EmbeddingModel, FlagEmbedding, InitOptions};
 
     use crate::{
@@ -161,6 +165,7 @@ mod tests {
 
     #[test]
     fn test_indexing() -> Result<()> {
+        Builder::new().filter(None, log::LevelFilter::Warn).init();
         // Download the embedding model if it doesn't exist yet.
         download_embedding_model();
 
@@ -181,7 +186,7 @@ mod tests {
         let mut file1 = File::create(temp_dir.path().join("file1.md"))?;
         let mut file2 = File::create(temp_dir.path().join("file2.md"))?;
         write!(file1, "Hello File1, a [link](file2).")?;
-        write!(file2, "Hello File2, another [link](file1) back.")?;
+        write!(file2, "Hello File2, a wikilink [[file1]] back.")?;
         log::info!("Created files.");
 
         let (index_event_sender, index_event_receiver) = channel::<watcher::IndexEvent>();
@@ -226,7 +231,7 @@ mod tests {
 
             let links = link.load::<Link>(&mut conn).unwrap();
 
-            assert_eq!(links.len(), 2);
+            assert_eq!(links.len(), 2, "Incorrect number of links.");
             assert!(links
                 .iter()
                 .any(|l| l.from == "file1.md" && l.to == "file2"));

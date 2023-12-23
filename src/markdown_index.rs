@@ -1,16 +1,8 @@
-use std::{
-    path::Path,
-    sync::{Arc, Mutex},
-};
-
-use diesel::{ExpressionMethods, RunQueryDsl, SqliteConnection};
-use markdown_it::Node;
-
 use crate::{
-    indexer::IndexExt,
-    note,
-    sqlite::{embedding_index::EmbeddingIndex, models, schema, SqliteInitConfig},
+    indexer::IndexExt, link_index::LinkIndex, note, sqlite::SqliteInitConfig, wikilink_parser,
 };
+use markdown_it::Node;
+use std::path::Path;
 
 pub struct MarkdownIndex {
     parser: markdown_it::MarkdownIt,
@@ -23,6 +15,7 @@ impl MarkdownIndex {
         let mut parser = markdown_it::MarkdownIt::new();
         markdown_it::plugins::cmark::add(&mut parser);
         markdown_it::plugins::extra::add(&mut parser);
+        wikilink_parser::add(&mut parser);
 
         Self {
             parser,
@@ -70,85 +63,5 @@ impl IndexExt<'_> for MarkdownIndex {
         self.child_extensions
             .iter_mut()
             .for_each(|ext| ext.remove(rel_path));
-    }
-}
-
-pub struct LinkIndex {
-    conn: Option<Arc<Mutex<SqliteConnection>>>,
-}
-
-impl LinkIndex {
-    pub fn new() -> Self {
-        Self { conn: None }
-    }
-}
-
-/// Link urls may be internal links, in which case this function cleans them, or external links (like webpages), in which case this function leaves them unchanged.
-/// Internal links may start with `./` which is undesired and are often times url encoded.
-fn link_url_to_rel_path(link_url: &str) -> String {
-    let url_decoded = &*urlencoding::decode(link_url).unwrap();
-    let without_prefix = url_decoded.trim_start_matches("./");
-    without_prefix.to_owned()
-}
-
-impl<'a> IndexExt<'a> for LinkIndex {
-    type InitCfg = SqliteInitConfig;
-    type NoteIn = MarkdownNote<'a>;
-
-    fn init(&mut self, config: &Self::InitCfg) {
-        self.conn = Some(Arc::clone(&config.conn));
-
-        let mut conn = self.conn.as_ref().unwrap().lock().unwrap();
-        diesel::sql_query(
-            r#"
-                    CREATE TABLE IF NOT EXISTS link (
-                        "from" TEXT NOT NULL,
-                        "to" TEXT NOT NULL,
-                        "text" TEXT,
-                        "start" INTEGER,
-                        "end" INTEGER,
-                        PRIMARY KEY("from", "start"),
-                        FOREIGN KEY("from") REFERENCES note (file)
-                    )
-                "#,
-        )
-        .execute(&mut *conn)
-        .unwrap();
-        log::info!("Index extension LinkIndex initialized.");
-    }
-
-    fn index(&mut self, md_note: &MarkdownNote<'a>) {
-        use markdown_it::plugins::cmark::inline;
-
-        let mut links = Vec::new();
-        md_note.markdown.walk(|node, _| {
-            if node.is::<inline::link::Link>() {
-                let link = node.cast::<inline::link::Link>().unwrap();
-                let (start, end) = node.srcmap.unwrap().get_byte_offsets();
-                links.push(models::Link {
-                    from: md_note.note.rel_path.to_str().unwrap().to_owned(),
-                    to: link_url_to_rel_path(&link.url),
-                    text: None, // TODO
-                    start: start.try_into().unwrap(),
-                    end: end.try_into().unwrap(),
-                });
-            }
-        });
-
-        // Insert all links into the database.
-        let mut conn = self.conn.as_ref().unwrap().lock().unwrap();
-        diesel::insert_into(schema::link::table)
-            .values(links)
-            .execute(&mut *conn)
-            .unwrap();
-    }
-
-    fn remove(&mut self, rel_path: &Path) {
-        let mut conn = self.conn.as_ref().unwrap().lock().unwrap();
-        use schema::link::dsl::*;
-        diesel::delete(schema::link::table)
-            .filter(from.eq(rel_path.to_str().unwrap()))
-            .execute(&mut *conn)
-            .unwrap();
     }
 }
